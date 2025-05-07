@@ -1058,7 +1058,7 @@ void mcx_savejdet(float* ppath, void* seeds, uint count, int doappend, Config* c
             col += dims[1];
         }
     } else {
-        char colnum[] = {1, cfg->his.maxmedia, cfg->his.maxmedia, cfg->his.maxmedia, 3, 3, 1, 4};
+        char colnum[] = {1, cfg->his.maxmedia, cfg->his.maxmedia, cfg->his.maxmedia, 4, 3, 1, 4};
         char* dtype[] = {"uint32", "uint32", "single", "single", "single", "single", "single", "single"};
         char* dname[] = {"detid", "nscat", "ppath", "mom", "p", "v", "w0", "s"};
         cJSON_AddItemToObject(obj, "PhotonData", dat = cJSON_CreateObject());
@@ -1588,7 +1588,7 @@ void mcx_preprocess(Config* cfg) {
     }
 
     if (cfg->issavedet && cfg->detnum == 0 && isbcdet == 0) {
-        cfg->issavedet = 0;
+        cfg->issavedet = 0; // Todo
     }
 
     if (cfg->issavedet == 0) {
@@ -2641,10 +2641,13 @@ int mcx_loadjson(cJSON* root, Config* cfg) {
 
                     if (cJSON_IsString(subitem->child->next->next->next)) {
                         if (strcmp(subitem->child->next->next->next->valuestring, "_NaN_") == 0) {
+                            printf("The light source uses the focal length NaN behavior.\n\n");
                             cfg->srcdir.w = NAN;
                         } else if (strcmp(subitem->child->next->next->next->valuestring, "_Inf_") == 0) {
+                            printf("The light source uses the focal length positive Inf behavior.\n\n");
                             cfg->srcdir.w = INFINITY;
                         } else if (strcmp(subitem->child->next->next->next->valuestring, "-_Inf_") == 0) {
+                            printf("The light source uses the focal length negative Inf behavior.\n\n");
                             cfg->srcdir.w = -INFINITY;
                         }
                     } else {

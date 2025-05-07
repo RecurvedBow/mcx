@@ -391,8 +391,10 @@ __device__ inline void savedetphoton(float n_det[], uint* detectedphoton, float*
             }
 
             if (SAVE_PEXIT(gcfg->savedetflag)) {
-                *((float3*)(n_det + baseaddr)) = float3(p0->x, p0->y, p0->z);
-                baseaddr += 3;
+                n_det[baseaddr++] = p0->x;
+                n_det[baseaddr++] = p0->y;
+                n_det[baseaddr++] = p0->z;
+                n_det[baseaddr++] = p0->w;
             }
 
             if (SAVE_VEXIT(gcfg->savedetflag)) {
@@ -1146,11 +1148,12 @@ __device__ inline int launchnewphoton(MCXpos* p, MCXdir* v, Stokes* s, MCXtime* 
                 saveexitppath(n_det, ppath, p, idx1d);
             }
         }
-
+    
 #ifdef SAVE_DETECTORS
 
         // let's handle detectors here
         if (gcfg->savedet) {
+            //savedetphoton(n_det, dpnum, ppath, p, v, s, photonseed, seeddata, isdet);
             if ((isdet & DET_MASK) == DET_MASK && (*mediaid == 0 || (issvmc &&
                                                    (nuvox->sv.isupper ? nuvox->sv.upper : nuvox->sv.lower) == 0)) && gcfg->issaveref < 2) {
                 savedetphoton(n_det, dpnum, ppath, p, v, s, photonseed, seeddata, isdet);
@@ -2584,7 +2587,7 @@ int mcx_list_gpu(Config* cfg, GPUInfo** info) {
         if (cuerr == (cudaError_t)30) {
             mcx_error(-(int)cuerr, "A CUDA-capable GPU is not found or configured", __FILE__, __LINE__);
         }
-
+        printf("If you get an error in line 2583, you have to restart your nvidia-drivers.");
         CUDA_ASSERT(cuerr);
     }
 
@@ -2786,7 +2789,7 @@ void mcx_run_simulation(Config* cfg, GPUInfo* gpu) {
     unsigned int w0offset = partialdata + 4;  //< the extra 4 numbers are total-escaped-energy, total-launched-energy, initial-weight, source_id
 
     //< \c hostdetreclen - host-side det photon data buffer per-photon length
-    unsigned int hostdetreclen = partialdata + SAVE_DETID(cfg->savedetflag) + 3 * (SAVE_PEXIT(cfg->savedetflag) + SAVE_VEXIT(cfg->savedetflag)) + SAVE_W0(cfg->savedetflag) + 4 * SAVE_IQUV(cfg->savedetflag);
+    unsigned int hostdetreclen = partialdata + SAVE_DETID(cfg->savedetflag) + 3 * (SAVE_W0(cfg->savedetflag) + SAVE_VEXIT(cfg->savedetflag)) + 4 * (SAVE_PEXIT(cfg->savedetflag) + SAVE_IQUV(cfg->savedetflag));
 
     //< \c is2d - flag to tell mcx if the simulation domain is 2D, set to 1 if any of the x/y/z dimensions has a length of 1
     unsigned int is2d = (cfg->dim.x == 1 ? 1 : (cfg->dim.y == 1 ? 2 : (cfg->dim.z == 1 ? 3 : 0)));
@@ -3793,7 +3796,7 @@ is more than what your have specified (%d), please use the -H option to specify 
 
                                 if (cfg->outputtype == otJacobian || cfg->outputtype == otRF || cfg->outputtype == otWLTOF) {
                                     scale[0] = cfg->unitinmm * scale[0]; // only paths in voxel units need scaling
-                                }
+                            }
                             }
                         } else if (cfg->outputtype == otJacobian || cfg->outputtype == otRF || cfg->outputtype == otWLTOF) {
                             scale[0] = cfg->unitinmm;
@@ -3892,6 +3895,7 @@ is more than what your have specified (%d), please use the -H option to specify 
             }
 
             cfg->his.detected = cfg->detectedcount;
+            printf("Saving individual photons.\n");
             mcx_savedetphoton(cfg->exportdetected, cfg->seeddata, cfg->detectedcount, 0, cfg);
         }
 
