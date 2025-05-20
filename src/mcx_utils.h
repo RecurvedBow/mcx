@@ -280,12 +280,17 @@ typedef struct MCXConfig {
     int srcid;                   /**< flag to control the simulation of multiple sources */
     unsigned int extrasrclen;    /**< length of additional sources */
     ExtraSrc* srcdata;           /**< buffer to store multiple source input data */
+    float cam_obj_dist;          /**< Distance from modeled camera lens to object in voxel units*/
+    float cam_proj_dist;         /**< Distance from modeled camera sensor to camera lens in voxel units*/
+    float cam_focal_length;      /**< Cam focal length in voxel units*/
+    float cam_aperture_radius;          /**< Camera aperture size in voxel units*/
 } Config;
 
 #ifdef  __cplusplus
 extern "C" {
 #endif
 void mcx_savedata(float* dat, size_t len, Config* cfg);
+void mcx_savecamsignals(float* camsignals, size_t len, Config* cfg);
 void mcx_savenii(float* dat, size_t len, char* name, int type32bit, int outputformatid, Config* cfg);
 void mcx_error(const int id, const char* msg, const char* file, const int linenum);
 void mcx_loadconfig(FILE* in, Config* cfg);

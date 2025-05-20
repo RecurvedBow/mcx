@@ -362,6 +362,9 @@ void mcx_initcfg(Config* cfg) {
 #else
     cfg->parentid = mpStandalone;
 #endif
+    cfg->cam_obj_dist = -1;
+    cfg->cam_proj_dist = -1;
+    cfg->cam_aperture_radius = -1;
 }
 
 /**
@@ -937,6 +940,20 @@ void mcx_savedata(float* dat, size_t len, Config* cfg) {
 
     fwrite(dat, sizeof(float), len * (1 + (cfg->outputtype == otRF || cfg->outputtype == otRFmus)), fp);
     fclose(fp);
+}
+
+void mcx_savecamsignals(float* camsignals, size_t len, Config* cfg)
+{
+    char* file_suffix = ".bin";
+    size_t filepathlen = strlen(cfg->session) + strlen(file_suffix) + 1;
+    char* filepath = malloc(filepathlen);
+
+    strcpy(filepath, cfg->session);
+    strcat(filepath, file_suffix);
+
+    FILE *f = fopen(filepath, "wb");
+    fwrite(camsignals, sizeof(float), len, f);
+    fclose(f);
 }
 
 /**
@@ -2213,13 +2230,27 @@ void mcx_loadconfig(FILE* in, Config* cfg) {
 
 int mcx_loadjson(cJSON* root, Config* cfg) {
     int i;
-    cJSON* Domain, *Optode, *Forward, *Session, *Shapes, *tmp, *subitem;
+    cJSON* Domain, *Optode, *Forward, *Session, *Shapes, *Camera, *tmp, *subitem;
     char filename[MAX_FULL_PATH] = {'\0'};
     Domain  = cJSON_GetObjectItem(root, "Domain");
     Optode  = cJSON_GetObjectItem(root, "Optode");
     Session = cJSON_GetObjectItem(root, "Session");
     Forward = cJSON_GetObjectItem(root, "Forward");
     Shapes  = cJSON_GetObjectItem(root, "Shapes");
+    Camera  = cJSON_GetObjectItem(root, "Camera");
+
+    if (Camera)
+    {
+        cfg->cam_obj_dist = FIND_JSON_KEY("ObjectDistance", "Camera.ObjectDistance", Camera, cfg->cam_obj_dist, valuedouble);
+        cfg->cam_focal_length = FIND_JSON_KEY("FocalLength", "Camera.FocalLength", Camera, cfg->cam_focal_length, valuedouble);
+        cfg->cam_proj_dist = FIND_JSON_KEY("ProjectionDistance", "Camera.ProjectionDistance", Camera, cfg->cam_proj_dist, valuedouble);
+        cfg->cam_aperture_radius = FIND_JSON_KEY("ApertureRadius", "Camera.ApertureRadius", Camera, cfg->cam_aperture_radius, valuedouble);
+
+        if (cfg->cam_obj_dist <= 0 || cfg->cam_focal_length <= 0 || cfg->cam_proj_dist <= 0 || cfg->cam_aperture_radius <= 0) {
+                MCX_ERROR(-1, "Missing or invalid camera parameters!");
+            }
+
+    }
 
     if (Domain) {
         char volfile[MAX_PATH_LENGTH];
