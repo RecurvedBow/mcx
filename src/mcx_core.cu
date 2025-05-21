@@ -427,7 +427,6 @@ __device__ inline void map_photon_to_camera_sensor(float camsignals[], MCXpos p0
 /**
  * @brief Recording detected photon information at photon termination
  * @param[in] n_det: pointer to the detector position array
- * @param[in] camsignals: pointer to the detector position array
  * @param[in] detectedphoton: variable in the global-mem recording the total detected photons
  * @param[in] ppath: buffer in the shared-mem to store the photon partial-pathlengths
  * @param[in] p0: the position/weight of the current photon packet
@@ -436,7 +435,7 @@ __device__ inline void map_photon_to_camera_sensor(float camsignals[], MCXpos p0
  * @param[in] seeddata: the RNG seed of the photon at launch, need to save for replay
  */
 
-__device__ inline void savedetphoton(float n_det[], float camsignals[], uint* detectedphoton, float* ppath, MCXpos* p0, MCXdir* v, Stokes* s, RandType t[RAND_BUF_LEN], RandType* seeddata, uint isdet) {
+__device__ inline void savedetphoton(float n_det[], uint* detectedphoton, float* ppath, MCXpos* p0, MCXdir* v, Stokes* s, RandType t[RAND_BUF_LEN], RandType* seeddata, uint isdet) {
     int detid;
     detid = (isdet == OUTSIDE_VOLUME_MIN) ? -1 : (int)finddetector(p0);
 
@@ -489,8 +488,6 @@ __device__ inline void savedetphoton(float n_det[], float camsignals[], uint* de
         } else if (gcfg->savedet == FILL_MAXDETPHOTON) {
             atomicSub(detectedphoton, 1);
         }
-
-        map_photon_to_camera_sensor(camsignals, *p0, *v);
     }
 }
 
@@ -1225,15 +1222,18 @@ __device__ inline int launchnewphoton(MCXpos* p, MCXdir* v, Stokes* s, MCXtime* 
                 saveexitppath(n_det, ppath, p, idx1d);
             }
         }
-    
+
+        map_photon_to_camera_sensor(camsignals, *p, *v);
+
 #ifdef SAVE_DETECTORS
 
         // let's handle detectors here
         if (gcfg->savedet) {
-            //savedetphoton(n_det, camsignals, dpnum, ppath, p, v, s, photonseed, seeddata, isdet);
+            //savedetphoton(n_det, dpnum, ppath, p, v, s, photonseed, seeddata, isdet);
             if ((isdet & DET_MASK) == DET_MASK && (*mediaid == 0 || (issvmc &&
-                                                   (nuvox->sv.isupper ? nuvox->sv.upper : nuvox->sv.lower) == 0)) && gcfg->issaveref < 2) {
-                savedetphoton(n_det, camsignals, dpnum, ppath, p, v, s, photonseed, seeddata, isdet);
+                                                   (nuvox->sv.isupper ? nuvox->sv.upper : nuvox->sv.lower) == 0)) && gcfg->issaveref < 2) 
+            {
+                savedetphoton(n_det, dpnum, ppath, p, v, s, photonseed, seeddata, isdet);
             }
         }
 
@@ -3966,7 +3966,7 @@ is more than what your have specified (%d), please use the -H option to specify 
             MCX_FPRINTF(cfg->flog, "saving data to file ...\t");
             mcx_savedata(cfg->exportfield, fieldlen, cfg);
 
-            if (cameraSignals)
+            if (cameraSignals != NULL)
             {
                 mcx_savecamsignals(cameraSignals, dimlen.y, cfg);
             }
@@ -4135,7 +4135,7 @@ is more than what your have specified (%d), please use the -H option to specify 
     free(energy);
     free(field);
 
-    if (cameraSignals)
+    if (cameraSignals != NULL)
     {    
         free(cameraSignals);
     }
