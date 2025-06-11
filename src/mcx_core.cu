@@ -358,6 +358,14 @@ __device__ inline void map_photon_to_camera_sensor(float camsignals[], MCXpos p0
         return;
     }
 
+    if (v.z >= 0)
+    {
+        // Wrong z-Direction
+        return;
+    }
+
+    camsignals[gcfg->dimlen.y]++;
+
     // Normalize direction vector.
     float tmp0 = rsqrtf(v.x * v.x + v.y * v.y + v.z * v.z);
     v.x *= tmp0;
@@ -420,8 +428,17 @@ __device__ inline void map_photon_to_camera_sensor(float camsignals[], MCXpos p0
     {
         return;
     }
+    
+    int index = dim_x * voxel_y + voxel_x;
 
-    camsignals[dim_x * voxel_y + voxel_x] += p0.w;
+    if (index >= gcfg->dimlen.y)
+    {
+        printf("IndexOutOfRangeException: The index %u was outside the array part for storing camera intensity of size %u.\n", index, gcfg->dimlen.y);
+        return;
+    }
+
+    camsignals[index] += p0.w;
+    camsignals[gcfg->dimlen.y + 1]++;
 }
 
 /**
@@ -3164,7 +3181,7 @@ void mcx_run_simulation(Config* cfg, GPUInfo* gpu) {
 
     //CUDA_ASSERT(cudaBindTexture(0, texmedia, gmedia));
     CUDA_ASSERT(cudaMalloc((void**) &gfield, sizeof(OutputType)*fieldlen * SHADOWCOUNT));
-    CUDA_ASSERT(cudaMalloc((void**) &gcamsignals, sizeof(OutputType)*dimlen.y));
+    CUDA_ASSERT(cudaMalloc((void**) &gcamsignals, sizeof(OutputType)*(dimlen.y + 2))); // The last value should contain the amount of captured photons
     CUDA_ASSERT(cudaMalloc((void**) &gPpos, sizeof(float4)*gpu[gpuid].autothread));
     CUDA_ASSERT(cudaMalloc((void**) &gPdir, sizeof(float4)*gpu[gpuid].autothread));
     CUDA_ASSERT(cudaMalloc((void**) &gPlen, sizeof(float4)*gpu[gpuid].autothread));
@@ -3379,7 +3396,7 @@ void mcx_run_simulation(Config* cfg, GPUInfo* gpu) {
              * Each repetition, we have to reset the output buffers, including \c gfield and \c gPdet
              */
             CUDA_ASSERT(cudaMemset(gfield, 0, sizeof(OutputType)*fieldlen * SHADOWCOUNT)); // cost about 1 ms
-            CUDA_ASSERT(cudaMemset(gcamsignals, 0, sizeof(float)*dimlen.y)); // cost about 1 ms
+            CUDA_ASSERT(cudaMemset(gcamsignals, 0, sizeof(float)*(dimlen.y + 2))); // cost about 1 ms
             CUDA_ASSERT(cudaMemset(gPdet, 0, sizeof(float)*cfg->maxdetphoton * (hostdetreclen)));
 
             if (cfg->issaveseed) {
@@ -3739,8 +3756,8 @@ is more than what your have specified (%d), please use the -H option to specify 
                 }
                 
                 // Apply camera sensor stuff
-                cameraSignals = (OutputType*)malloc(sizeof(OutputType) * dimlen.y);
-                CUDA_ASSERT(cudaMemcpy(cameraSignals, gcamsignals, sizeof(OutputType) * dimlen.y, cudaMemcpyDeviceToHost));
+                cameraSignals = (OutputType*)malloc(sizeof(OutputType) * (dimlen.y + 2));
+                CUDA_ASSERT(cudaMemcpy(cameraSignals, gcamsignals, sizeof(OutputType) * (dimlen.y + 2), cudaMemcpyDeviceToHost));
             }
         } /** Here is the end of the inner-loop (respin) */
 
@@ -3968,7 +3985,7 @@ is more than what your have specified (%d), please use the -H option to specify 
 
             if (cameraSignals != NULL)
             {
-                mcx_savecamsignals(cameraSignals, dimlen.y, cfg);
+                mcx_savecamsignals(cameraSignals, dimlen.y + 2, cfg);
             }
 
             MCX_FPRINTF(cfg->flog, "saving data complete : %d ms\n\n", GetTimeMillis() - tic);
