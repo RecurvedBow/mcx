@@ -284,6 +284,7 @@ typedef struct MCXConfig {
     float cam_proj_dist;         /**< Distance from modeled camera sensor to camera lens in voxel units*/
     float cam_focal_length;      /**< Cam focal length in voxel units*/
     float cam_aperture_radius;          /**< Camera aperture size in voxel units*/
+    float cam_ideal_dist;        /**< Ideal camera distance to set volume size as 1*/
 } Config;
 
 #ifdef  __cplusplus

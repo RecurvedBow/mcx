@@ -351,9 +351,54 @@ __device__ inline void updatestokes(Stokes* s, float theta, float phi, float3* u
     s->i = 1.f;
 }
 
-__device__ inline void map_photon_to_camera_sensor(float camsignals[], MCXpos p0, MCXdir v)
+
+__device__ inline float cone_kernel(int dx, int dy, int radius)
 {
-    if (gcfg->cam_focal_length < 0 || gcfg->cam_obj_dist < 0 || gcfg->cam_proj_dist < 0 || gcfg->cam_aperture_radius < 0)
+    float r = 1 / rsqrtf(dx * dx + dy * dy);  // Inv distance
+    if (r <= radius) {
+        return 1.0f - r / radius;
+    }
+    return 0.0f;
+}
+
+
+__device__ inline void apply_cone_based_photon_splatting(float camsignals[], int cone_radius, int image_width, int image_height, int p_x, int p_y, float p_weight)
+{
+    float kernel_sum = 0;
+    for (int dy = -cone_radius; dy <= cone_radius; dy++) {
+        for (int dx = -cone_radius; dx <= cone_radius; dx++) {
+            kernel_sum += cone_kernel(dx, dy, cone_radius);
+        }
+    }
+
+    for (int dy = -cone_radius; dy <= cone_radius; dy++) {
+        for (int dx = -cone_radius; dx <= cone_radius; dx++) {
+            int voxel_x = p_x + dx;
+            int voxel_y = p_y + dy;
+
+            if (voxel_x < 0 || voxel_x >= image_width || voxel_y < 0 || voxel_y >= image_height)
+            {
+                continue;
+            }
+
+            float splatting_weight = cone_kernel(dx, dy, cone_radius);
+            int index = image_width * voxel_y + voxel_x;
+
+            if (index >= image_width * image_height)
+            {
+                printf("IndexOutOfRangeException: The index %u was outside the array part for storing camera intensity of size %u.\n", index, gcfg->dimlen.y);
+                continue;
+            }
+
+            float added_weight = p_weight * (splatting_weight / kernel_sum);
+            atomicAdd(&camsignals[index], added_weight);
+        }
+    }
+}
+
+__device__ inline void map_photon_to_camera_sensor(float camsignals[], MCXpos p0, MCXdir v, float3 actualP0)
+{
+    if (gcfg->cam_obj_dist <= 0 || gcfg->cam_aperture_radius <= 0)
     {
         return;
     }
@@ -364,7 +409,10 @@ __device__ inline void map_photon_to_camera_sensor(float camsignals[], MCXpos p0
         return;
     }
 
-    camsignals[gcfg->dimlen.y]++;
+    atomicAdd(&camsignals[gcfg->dimlen.y], 1);
+
+    uint dim_x = gcfg->dimlen.x;
+    uint dim_y = roundf(gcfg->dimlen.y / gcfg->dimlen.x);
 
     // Normalize direction vector.
     float tmp0 = rsqrtf(v.x * v.x + v.y * v.y + v.z * v.z);
@@ -372,73 +420,146 @@ __device__ inline void map_photon_to_camera_sensor(float camsignals[], MCXpos p0
     v.y *= tmp0;
     v.z *= tmp0;
 
-    float lens_magnification = -gcfg->cam_proj_dist / gcfg->cam_obj_dist;
-
     // Project photon to lens.
-    float t_lens = (gcfg->cam_obj_dist + p0.z) / fabsf(p0.z);
-    float2 p_on_lens = {
-        p0.x + v.x * t_lens,
-        p0.y + v.y * t_lens
+    float t_lens = (gcfg->cam_obj_dist + p0.z) / fabsf(v.z);
+    float2 projection_vector = {
+        v.x * t_lens,
+        v.y * t_lens
     };
-    
-    // Todo: Check if x refers to width or height.
-    uint dim_x = gcfg->dimlen.x;
-    uint dim_y = roundf(gcfg->dimlen.y / gcfg->dimlen.x);
-    float2 lens_center = {dim_x / 2.f, dim_y / 2.f};
 
-    float2 distance_p_on_lens_to_lens_center = {
-        p_on_lens.x - lens_center.x,
-        p_on_lens.y - lens_center.y
-    };
-    float squared_distance_p_on_lens_to_lens_center = distance_p_on_lens_to_lens_center.x * distance_p_on_lens_to_lens_center.x + distance_p_on_lens_to_lens_center.y * distance_p_on_lens_to_lens_center.y;
-    if (squared_distance_p_on_lens_to_lens_center > gcfg->cam_aperture_radius * gcfg->cam_aperture_radius)
+    bool isCameraEnabled = gcfg->cam_proj_dist > 0;
+
+    if (isCameraEnabled)
     {
-        // Outside of the lens aperture
-        return;
+        if (gcfg->cam_focal_length <= 0)
+        {
+            printf("Something's wrong. Check again\n")
+            return;
+        }
+
+        float lens_magnification = -gcfg->cam_proj_dist / gcfg->cam_obj_dist;
+
+        float2 p_on_lens = {
+            p0.x + projection_vector.x,
+            p0.y + projection_vector.y
+        };
+        
+        // Todo: Check if x refers to width or height.
+        float2 lens_center = {dim_x / 2.f, dim_y / 2.f};
+
+        float2 distance_p_on_lens_to_lens_center = {
+            p_on_lens.x - lens_center.x,
+            p_on_lens.y - lens_center.y
+        };
+        float squared_distance_p_on_lens_to_lens_center = distance_p_on_lens_to_lens_center.x * distance_p_on_lens_to_lens_center.x + distance_p_on_lens_to_lens_center.y * distance_p_on_lens_to_lens_center.y;
+        if (squared_distance_p_on_lens_to_lens_center > gcfg->cam_aperture_radius * gcfg->cam_aperture_radius)
+        {
+            // Outside of the lens aperture
+            return;
+        }
+
+        float3 v_after_lens = {
+            v.x - distance_p_on_lens_to_lens_center.x * fabsf(v.z) / gcfg->cam_focal_length,
+            v.y - distance_p_on_lens_to_lens_center.y * fabsf(v.z) / gcfg->cam_focal_length,
+            v.z
+        };
+
+        // Project photon to sensor
+        float t_sensor = gcfg->cam_proj_dist / fabsf(v_after_lens.z);
+        float2 p_on_sensor = {
+            p_on_lens.x + v_after_lens.x * t_sensor,
+            p_on_lens.y + v_after_lens.y * t_sensor
+        };
+
+        //Apply magnification on projected photon position on sensor
+        float2 sensor_center = lens_center;
+        float2 p_on_sensor_shifted = {
+            p_on_sensor.x - sensor_center.x,
+            p_on_sensor.y - sensor_center.y
+        };
+        float2 p_on_sensor_corrected = {
+            p_on_sensor_shifted.x / lens_magnification + sensor_center.x,
+            p_on_sensor_shifted.y / lens_magnification + sensor_center.y,
+        };
+        
+        // Cone-based photon splatting
+        //int radius = 1;
+
+        int voxel_x = floorf(p_on_sensor_corrected.x);
+        int voxel_y = floorf(p_on_sensor_corrected.y);
+
+        //if (voxel_x < -radius || voxel_x >= dim_x + radius || voxel_y < -radius || voxel_y >= dim_y + radius)
+        //{
+        //    return;
+        //}
+        
+        //apply_cone_based_photon_splatting(camsignals, radius, dim_x, dim_y, voxel_x, voxel_y, p0.w);
+        if (voxel_x < 0 || voxel_x >= dim_x || voxel_y < 0 || voxel_y >= dim_y)
+        {
+            return;
+        }
+        
+        int index = dim_x * voxel_y + voxel_x;
+
+        if (index >= gcfg->dimlen.y)
+        {
+            printf("IndexOutOfRangeException: The index %u was outside the array part for storing camera intensity of size %u.\n", index, gcfg->dimlen.y);
+            return;
+        }
+
+        atomicAdd(&camsignals[index], p0.w);
+        atomicAdd(&camsignals[gcfg->dimlen.y + 1], 1);
     }
-
-    float3 v_after_lens = {
-        v.x - distance_p_on_lens_to_lens_center.x * fabsf(v.z) / gcfg->cam_focal_length,
-        v.y - distance_p_on_lens_to_lens_center.y * fabsf(v.z) / gcfg->cam_focal_length,
-        v.z
-    };
-
-    // Project photon to sensor
-    float t_sensor = gcfg->cam_proj_dist / fabsf(v_after_lens.z);
-    float2 p_on_sensor = {
-        p_on_lens.x + v_after_lens.x * t_sensor,
-        p_on_lens.y + v_after_lens.y * t_sensor
-    };
-
-    //Apply magnification on projected photon position on sensor
-    float2 sensor_center = lens_center;
-    float2 p_on_sensor_shifted = {
-        p_on_sensor.x - sensor_center.x,
-        p_on_sensor.y - sensor_center.y
-    };
-    float2 p_on_sensor_corrected = {
-        p_on_sensor_shifted.x / lens_magnification + sensor_center.x,
-        p_on_sensor_shifted.y / lens_magnification + sensor_center.y,
-    };
-
-    int voxel_x = floorf(p_on_sensor_corrected.x);
-    int voxel_y = floorf(p_on_sensor_corrected.y);
-
-    if (voxel_x < 0 || voxel_x >= dim_x || voxel_y < 0 || voxel_y >= dim_y)
+    else
     {
-        return;
-    }
-    
-    int index = dim_x * voxel_y + voxel_x;
+        if (gcfg->cam_ideal_dist <= 0)
+        {
+            printf("Something's wrong. Check again\n")
+            return;
+        }
+        
+        // Check if actualP0 and current p0 are connected by the direction.
 
-    if (index >= gcfg->dimlen.y)
-    {
-        printf("IndexOutOfRangeException: The index %u was outside the array part for storing camera intensity of size %u.\n", index, gcfg->dimlen.y);
-        return;
-    }
+        // Check if within hypothetical aperture
+        float squared_distance_p_on_lens_to_lens_center = projection_vector.x * projection_vector.x + projection_vector.y * projection_vector.y;
+        if (squared_distance_p_on_lens_to_lens_center > gcfg->cam_aperture_radius * gcfg->cam_aperture_radius)
+        {
+            // Outside of the lens aperture
+            return;
+        }
 
-    camsignals[index] += p0.w;
-    camsignals[gcfg->dimlen.y + 1]++;
+        float actual_z_position = gcfg->cam_obj_dist + actualP0.z;
+        float zoom_factor = gcfg->cam_ideal_dist / actual_z_position;
+
+        float2 relative_p0_to_project = {
+            actualP0.x / dim.x * zoom_factor,
+            actualP0.y / dim.y * zoom_factor
+        }
+
+        float2 p_on_sensor = {
+            relative_p0_to_project.x * dim.x, // Todo: Replace with pixel width and height
+            relative_p0_to_project.y * dim.y
+        }
+
+        int voxel_x = floorf(p_on_sensor_corrected.x);
+        int voxel_y = floorf(p_on_sensor_corrected.y);
+
+        if (voxel_x < 0 || voxel_x >= dim_x || voxel_y < 0 || voxel_y >= dim_y)
+        {
+            return;
+        }
+        
+        int index = dim_x * voxel_y + voxel_x;
+
+        if (index >= gcfg->dimlen.y)
+        {
+            printf("IndexOutOfRangeException: The index %u was outside the array part for storing camera intensity of size %u.\n", index, gcfg->dimlen.y);
+            return;
+        }
+
+        atomicAdd(&camsignals[index], p0.w);
+        atomicAdd(&camsignals[gcfg->dimlen.y + 1], 1);
+    }
 }
 
 /**
@@ -1156,7 +1277,7 @@ __device__ inline void rotatevector(MCXdir* v, float stheta, float ctheta, float
  */
 
 template <const int ispencil, const int isreflect, const int islabel, const int issvmc, const int ispolarized>
-__device__ inline int launchnewphoton(MCXpos* p, MCXdir* v, Stokes* s, MCXtime* f, float3* rv, short flipdir[4], Medium* prop, uint* idx1d, OutputType* field,
+__device__ inline int launchnewphoton(MCXpos* p, MCXdir* v, float3* actualP0, Stokes* s, MCXtime* f, float3* rv, short flipdir[4], Medium* prop, uint* idx1d, OutputType* field,
                                       uint* mediaid, OutputType* w0, uint isdet, float ppath[], float n_det[], float camsignals[], uint* dpnum,
                                       RandType t[RAND_BUF_LEN], RandType photonseed[RAND_BUF_LEN],
                                       uint media[], float srcpattern[], int threadid, RandType rngseed[], RandType seeddata[], float gdebugdata[], volatile int gprogress[],
@@ -1240,7 +1361,7 @@ __device__ inline int launchnewphoton(MCXpos* p, MCXdir* v, Stokes* s, MCXtime* 
             }
         }
 
-        map_photon_to_camera_sensor(camsignals, *p, *v);
+        map_photon_to_camera_sensor(camsignals, *p, *v, *actualP0);
 
 #ifdef SAVE_DETECTORS
 
@@ -1672,7 +1793,16 @@ __device__ inline int launchnewphoton(MCXpos* p, MCXdir* v, Stokes* s, MCXtime* 
                     stheta = sqrtf(rand_uniform01(t));
                     ctheta = sqrtf(1.f - stheta * stheta);
                     rotatevector(v, stheta, ctheta, sphi, cphi);
-                } else if (launchsrc->dir.w != 0.f) {
+                } else if (launchsrc->dir.w > 0.f && isinf(launchsrc->dir.w)) { // custom isotropic distribution - here +-5°
+                    float ang, stheta, ctheta, sphi, cphi;
+                    ang = TWO_PI * rand_uniform01(t); //next arimuth angle
+                    sincosf(ang, &sphi, &cphi);
+                    float costheta = (1.0f - cosf(M_PI * 30.f / 180.0f)) * rand_uniform01(t) + cosf(M_PI * 30.f / 180.0f);
+                    ang = acosf(costheta);
+                    sincosf(ang, &stheta, &ctheta);
+                    rotatevector(v, stheta, ctheta, sphi, cphi);
+                } 
+                else if (launchsrc->dir.w != 0.f) {
                     float Rn2 = (launchsrc->dir.w > 0.f) - (launchsrc->dir.w < 0.f);
                     rv->x += launchsrc->dir.w * v->x;
                     rv->y += launchsrc->dir.w * v->y;
@@ -1686,6 +1816,58 @@ __device__ inline int launchnewphoton(MCXpos* p, MCXdir* v, Stokes* s, MCXtime* 
                     v->z *= Rn2;
                 }
             }
+            else if (launchsrc->param3.x > 0.5)
+                {
+                    if (threadid == 0)
+                    {
+                        printf("Focal length is defined!");
+                        
+                    }
+
+                    float sampled_angle = -1;
+                    float distribution_type = launchsrc->param3.x;
+
+                    if (distribution_type >= 0 && distribution_type < 1)
+                    {
+                        if (threadid == 0)
+                        {
+                            printf("Using Gaussian distribution.");
+                        }
+                        
+                        // Gaussian distribution
+                        float mean = launchsrc->param3.y;
+                        float sigma = launchsrc->param3.z;
+
+                        // Use Box–Muller transform
+                        float u1 = 0.0;
+                        while (u1 <= 0.0) {
+                            u1 = rand_uniform01(t);  // avoid zero
+                        } 
+
+                        float u2 = rand_uniform01(t);
+                        float z0 = sqrtf(-2.0 * logf(u1)) * cosf(2.0 * M_PI * u2);
+
+                        sampled_angle = mean + sigma * z0;
+                    }
+                    else
+                    {
+                        printf("Invalid angle distribution defined!");
+                        return -1;
+                    }
+
+                    if (sampled_angle < -M_PI || sampled_angle > M_PI)
+                    {
+                        printf("Implementation of angle distribution is incorrect");
+                        return -1;
+                    }
+
+                    float ang, stheta, ctheta, sphi, cphi;
+                    ang = TWO_PI * rand_uniform01(t); //next arimuth angle
+                    sincosf(ang, &sphi, &cphi);
+                    ang = sampled_angle;  // No need for negative cases because arimuth angle is 360°
+                    sincosf(ang, &stheta, &ctheta);
+                    rotatevector(v, stheta, ctheta, sphi, cphi);
+                }
         }
 
         /**
@@ -1724,6 +1906,9 @@ __device__ inline int launchnewphoton(MCXpos* p, MCXdir* v, Stokes* s, MCXtime* 
      * Now a photon is successfully launched, perform necssary initialization for a new trajectory
      */
     f->ndone++;
+
+    *actualP0 = {-1.f, -1.f, -1.f};
+
     updateproperty<islabel, issvmc>(prop, *mediaid, t, *idx1d, media, (float3*)p, nuvox, flipdir);
 
     if (gcfg->debuglevel & (MCX_DEBUG_MOVE | MCX_DEBUG_MOVE_ONLY)) {
@@ -1824,6 +2009,9 @@ __global__ void mcx_main_loop(uint media[], OutputType field[], OutputType camsi
     MCXpos  p = {0.f, 0.f, 0.f, CUDA_NAN_F}; //< Photon position state: {x,y,z}: coordinates in grid unit, w:packet weight
     MCXdir  v = {0.f, 0.f, 0.f, 0.f}; //< Photon direction state: {x,y,z}: unitary direction vector in grid unit, nscat:total scat event
     MCXtime f = {0.f, 0.f, 0.f, -1.f}; //< Photon parameter state: pscat: remaining scattering probability,t: photon elapse time, pathlen: total pathlen in one voxel, ndone: completed photons
+    float3 actualP0 = {-1.f, -1.f, -1.f}; //< Stores the last photon position when photon moved from tissue to air. Does not store anything if such event never occurs.
+    float3 prev_p = {-1.f, -1.f, -1.f};
+    float prev_mua = -1.f;
 
     MCXsp nuvox;
     Stokes s;
@@ -1909,7 +2097,7 @@ __global__ void mcx_main_loop(uint media[], OutputType field[], OutputType camsi
      * Launch the first photon
      */
 
-    if (launchnewphoton<ispencil, isreflect, islabel, issvmc, ispolarized>(&p, &v, &s, &f, &rv, flipdir, &prop, &idx1d, field, &mediaid, &w0, 0, ppath,
+    if (launchnewphoton<ispencil, isreflect, islabel, issvmc, ispolarized>(&p, &v, &actualP0, &s, &f, &rv, flipdir, &prop, &idx1d, field, &mediaid, &w0, 0, ppath,
             n_det, camsignals, detectedphoton, t, (RandType*)(sharedmem + sizeof(float) * (gcfg->nphaselen + gcfg->nanglelen) + threadIdx.x * gcfg->issaveseed * RAND_BUF_LEN * sizeof(RandType)), media, srcpattern,
             idx, (RandType*)n_seed, seeddata, gdebugdata, gprogress, photontof, &nuvox)) {
         GPUDEBUG(("thread %d: fail to launch photon\n", idx));
@@ -2187,6 +2375,15 @@ __global__ void mcx_main_loop(uint media[], OutputType field[], OutputType camsi
 #else
         p.w *= expf(-prop.mua * len);
 #endif
+        
+        if ((prev_mua > 1e-8) && (prop.mua <= 1e-8))
+        {
+            // Photon is moving from non-air to air.
+            actualP0 = prev_p;
+        }
+        
+        prev_p = {p.x, p.y, p.z};
+        prev_mua = prop.mua;
 
         /** remaining unitless scattering length: sum(s_i*mus_i), unit-less */
         f.pscat -= slen;
@@ -2385,7 +2582,7 @@ __global__ void mcx_main_loop(uint media[], OutputType field[], OutputType camsi
 
             GPUDEBUG(("direct relaunch at idx=[%d] mediaid=[%d], ref=[%d] bcflag=%d timegate=%d\n", idx1d, mediaid, gcfg->doreflect, isdet, f.t > gcfg->twin1));
 
-            if (launchnewphoton<ispencil, isreflect, islabel, issvmc, ispolarized>(&p, &v, &s, &f, &rv, flipdir, &prop, &idx1d, field, &mediaid, &w0,
+            if (launchnewphoton<ispencil, isreflect, islabel, issvmc, ispolarized>(&p, &v, &actualP0, &s, &f, &rv, flipdir, &prop, &idx1d, field, &mediaid, &w0,
                     (((idx1d == OUTSIDE_VOLUME_MAX && gcfg->bc[9 + flipdir[3]]) || (idx1d == OUTSIDE_VOLUME_MIN && gcfg->bc[6 + flipdir[3]])) ? OUTSIDE_VOLUME_MIN : (mediaidold & DET_MASK)),
                     ppath, n_det, camsignals, detectedphoton, t, (RandType*)(sharedmem + sizeof(float) * (gcfg->nphaselen + gcfg->nanglelen) + threadIdx.x * gcfg->issaveseed * RAND_BUF_LEN * sizeof(RandType)),
                     media, srcpattern, idx, (RandType*)n_seed, seeddata, gdebugdata, gprogress, photontof, &nuvox)) {
@@ -2409,7 +2606,7 @@ __global__ void mcx_main_loop(uint media[], OutputType field[], OutputType camsi
             } else {
                 GPUDEBUG(("relaunch after Russian roulette at idx=[%d] mediaid=[%d], ref=[%d]\n", idx1d, mediaid, gcfg->doreflect));
 
-                if (launchnewphoton<ispencil, isreflect, islabel, issvmc, ispolarized>(&p, &v, &s, &f, &rv, flipdir, &prop, &idx1d, field, &mediaid, &w0, (mediaidold & DET_MASK), ppath,
+                if (launchnewphoton<ispencil, isreflect, islabel, issvmc, ispolarized>(&p, &v, &actualP0, &s, &f, &rv, flipdir, &prop, &idx1d, field, &mediaid, &w0, (mediaidold & DET_MASK), ppath,
                         n_det, camsignals, detectedphoton, t, (RandType*)(sharedmem + sizeof(float) * (gcfg->nphaselen + gcfg->nanglelen) + threadIdx.x * gcfg->issaveseed * RAND_BUF_LEN * sizeof(RandType)),
                         media, srcpattern, idx, (RandType*)n_seed, seeddata, gdebugdata, gprogress, photontof, &nuvox)) {
                     break;
@@ -2437,7 +2634,7 @@ __global__ void mcx_main_loop(uint media[], OutputType field[], OutputType camsi
                     nuvox.nv = -nuvox.nv; // flip normal vector back for reflection/refraction computation
 
                     if (reflectray(n1, (float3*) & (v), &rv, &nuvox, &prop, t)) { // true if photon transmits to background media
-                        if (launchnewphoton<ispencil, isreflect, islabel, issvmc, ispolarized>(&p, &v, &s, &f, &rv, flipdir, &prop, &idx1d, field, &mediaid, &w0, (mediaidold & DET_MASK),
+                        if (launchnewphoton<ispencil, isreflect, islabel, issvmc, ispolarized>(&p, &v, &actualP0, &s, &f, &rv, flipdir, &prop, &idx1d, field, &mediaid, &w0, (mediaidold & DET_MASK),
                                 ppath, n_det, camsignals, detectedphoton, t, (RandType*)(sharedmem + sizeof(float) * (gcfg->nphaselen + gcfg->nanglelen) + threadIdx.x * gcfg->issaveseed * RAND_BUF_LEN * sizeof(RandType)),
                                 media, srcpattern, idx, (RandType*)n_seed, seeddata, gdebugdata, gprogress, photontof, &nuvox)) {
                             break;
@@ -2497,7 +2694,7 @@ __global__ void mcx_main_loop(uint media[], OutputType field[], OutputType camsi
                         if (mediaid == 0 || (issvmc && (nuvox.sv.isupper ? nuvox.sv.upper : nuvox.sv.lower) == 0)) { // transmission to external boundary
                             GPUDEBUG(("transmit to air, relaunch\n"));
 
-                            if (launchnewphoton<ispencil, isreflect, islabel, issvmc, ispolarized>(&p, &v, &s, &f, &rv, flipdir, &prop, &idx1d, field, &mediaid, &w0,
+                            if (launchnewphoton<ispencil, isreflect, islabel, issvmc, ispolarized>(&p, &v, &actualP0, &s, &f, &rv, flipdir, &prop, &idx1d, field, &mediaid, &w0,
                                     (((idx1d == OUTSIDE_VOLUME_MAX && gcfg->bc[9 + flipdir[3]]) || (idx1d == OUTSIDE_VOLUME_MIN && gcfg->bc[6 + flipdir[3]])) ? OUTSIDE_VOLUME_MIN : (mediaidold & DET_MASK)),
                                     ppath, n_det, camsignals, detectedphoton, t, (RandType*)(sharedmem + sizeof(float) * (gcfg->nphaselen + gcfg->nanglelen) + threadIdx.x * gcfg->issaveseed * RAND_BUF_LEN * sizeof(RandType)),
                                     media, srcpattern, idx, (RandType*)n_seed, seeddata, gdebugdata, gprogress, photontof, &nuvox)) {
@@ -2532,7 +2729,7 @@ __global__ void mcx_main_loop(uint media[], OutputType field[], OutputType camsi
                         updateproperty<islabel, issvmc>(&prop, mediaid, t, idx1d, media, (float3*)&p, &nuvox, flipdir); //< optical property across the interface
 
                         if (issvmc && (nuvox.sv.isupper ? nuvox.sv.upper : nuvox.sv.lower) == 0) { // terminate photon if photon is reflected to background medium
-                            if (launchnewphoton<ispencil, isreflect, islabel, issvmc, ispolarized>(&p, &v, &s, &f, &rv, flipdir, &prop, &idx1d, field, &mediaid, &w0, (mediaidold & DET_MASK),
+                            if (launchnewphoton<ispencil, isreflect, islabel, issvmc, ispolarized>(&p, &v, &actualP0, &s, &f, &rv, flipdir, &prop, &idx1d, field, &mediaid, &w0, (mediaidold & DET_MASK),
                                     ppath, n_det, camsignals, detectedphoton, t, (RandType*)(sharedmem + sizeof(float) * (gcfg->nphaselen + gcfg->nanglelen) + threadIdx.x * gcfg->issaveseed * RAND_BUF_LEN * sizeof(RandType)),
                                     media, srcpattern, idx, (RandType*)n_seed, seeddata, gdebugdata, gprogress, photontof, &nuvox)) {
                                 break;
@@ -2900,7 +3097,7 @@ void mcx_run_simulation(Config* cfg, GPUInfo* gpu) {
                       cfg->debuglevel, cfg->savedetflag, hostdetreclen, partialdata, w0offset, cfg->mediabyte,
                       (uint)cfg->maxjumpdebug, cfg->gscatter, is2d, cfg->replaydet, cfg->srcnum,
                       cfg->nphase, cfg->nphase + (cfg->nphase & 0x1), cfg->nangle, cfg->nangle + (cfg->nangle & 0x1), cfg->omega,
-                      cfg->cam_obj_dist, cfg->cam_proj_dist, cfg->cam_focal_length, cfg->cam_aperture_radius
+                      cfg->cam_obj_dist, cfg->cam_proj_dist, cfg->cam_focal_length, cfg->cam_aperture_radius, cfg->cam_ideal_dist
                      };
 
     if (param.isatomic) {
@@ -3471,6 +3668,7 @@ void mcx_run_simulation(Config* cfg, GPUInfo* gpu) {
              */
             switch (ispencil * 10000 + (isref > 0) * 1000 + (cfg->mediabyte <= 4) * 100 + issvmc * 10 + ispolarized) {
                 case 0:
+
                     mcx_main_loop<0, 0, 0, 0, 0> <<< mcgrid, mcblock, sharedbuf>>>(gmedia, gfield, gcamsignals, genergy, gPseed, gPpos, gPdir, gPlen, gPdet, gdetected, gsrcpattern, greplayw, greplaytof, greplaydetid, gseeddata, gdebugdata, ginvcdf, gangleinvcdf, gsmatrix, gprogress);
                     break;
 

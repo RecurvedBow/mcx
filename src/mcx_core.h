@@ -198,6 +198,7 @@ typedef struct  __align__(16) KernelParams {
     float cam_proj_dist;
     float cam_focal_length;
     float cam_aperture_radius;
+    float cam_ideal_dist;
     unsigned char bc[12];              /**< boundary condition flags, copy the first 12 chars from cfg->bc without the terminating NULL */
 } MCXParam;
 

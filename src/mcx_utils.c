@@ -365,6 +365,7 @@ void mcx_initcfg(Config* cfg) {
     cfg->cam_obj_dist = -1;
     cfg->cam_proj_dist = -1;
     cfg->cam_aperture_radius = -1;
+    cfg->cam_ideal_dist = -1;
 }
 
 /**
@@ -2230,7 +2231,7 @@ void mcx_loadconfig(FILE* in, Config* cfg) {
 
 int mcx_loadjson(cJSON* root, Config* cfg) {
     int i;
-    cJSON* Domain, *Optode, *Forward, *Session, *Shapes, *Camera, *tmp, *subitem;
+    cJSON* Domain, *Optode, *Forward, *Session, *Shapes, *Camera, *Backtrack, *tmp, *subitem;
     char filename[MAX_FULL_PATH] = {'\0'};
     Domain  = cJSON_GetObjectItem(root, "Domain");
     Optode  = cJSON_GetObjectItem(root, "Optode");
@@ -2238,6 +2239,12 @@ int mcx_loadjson(cJSON* root, Config* cfg) {
     Forward = cJSON_GetObjectItem(root, "Forward");
     Shapes  = cJSON_GetObjectItem(root, "Shapes");
     Camera  = cJSON_GetObjectItem(root, "Camera");
+    Backtrack = cJSON_GetObjectItem(root, "Backtrack");
+
+    if (Camera && Backtrack)
+    {
+        MCX_ERROR(-1, "Both camera and backtrack modeling are enabled, but only one can be");
+    }
 
     if (Camera)
     {
@@ -2249,7 +2256,17 @@ int mcx_loadjson(cJSON* root, Config* cfg) {
         if (cfg->cam_obj_dist <= 0 || cfg->cam_focal_length <= 0 || cfg->cam_proj_dist <= 0 || cfg->cam_aperture_radius <= 0) {
                 MCX_ERROR(-1, "Missing or invalid camera parameters!");
             }
+    }
 
+    if (Backtrack)
+    {
+        cfg->cam_obj_dist = FIND_JSON_KEY("ObjectDistance", "Backtrack.ObjectDistance", Backtrack, cfg->cam_obj_dist, valuedouble);
+        cfg->cam_ideal_dist = FIND_JSON_KEY("IdealDistance", "Backtrack.IdealDistance", Backtrack, cfg->cam_ideal_dist, valuedouble);
+        cfg->cam_aperture_radius = FIND_JSON_KEY("ApertureRadius", "Backtrack.ApertureRadius", Backtrack, cfg->cam_aperture_radius, valuedouble);
+
+        if (cfg->cam_obj_dist <= 0 || cfg->cam_ideal_dist <= 0 || cfg->cam_aperture_radius <= 0) {
+                MCX_ERROR(-1, "Missing or invalid camera parameters!");
+            }
     }
 
     if (Domain) {
