@@ -366,6 +366,7 @@ void mcx_initcfg(Config* cfg) {
     cfg->cam_proj_dist = -1;
     cfg->cam_aperture_radius = -1;
     cfg->cam_ideal_dist = -1;
+    cfg->cam_true_aperture_radius = -1;
 }
 
 /**
@@ -2262,9 +2263,10 @@ int mcx_loadjson(cJSON* root, Config* cfg) {
     {
         cfg->cam_obj_dist = FIND_JSON_KEY("ObjectDistance", "Backtrack.ObjectDistance", Backtrack, cfg->cam_obj_dist, valuedouble);
         cfg->cam_ideal_dist = FIND_JSON_KEY("IdealDistance", "Backtrack.IdealDistance", Backtrack, cfg->cam_ideal_dist, valuedouble);
-        cfg->cam_aperture_radius = FIND_JSON_KEY("ApertureRadius", "Backtrack.ApertureRadius", Backtrack, cfg->cam_aperture_radius, valuedouble);
+        cfg->cam_aperture_radius = FIND_JSON_KEY("ApproxApertureRadius", "Backtrack.ApproxApertureRadius", Backtrack, cfg->cam_aperture_radius, valuedouble);
+        cfg->cam_true_aperture_radius = FIND_JSON_KEY("TrueApertureRadius", "Backtrack.TrueApertureRadius", Backtrack, cfg->cam_true_aperture_radius, valuedouble);
 
-        if (cfg->cam_obj_dist <= 0 || cfg->cam_ideal_dist <= 0 || cfg->cam_aperture_radius <= 0) {
+        if (cfg->cam_obj_dist <= 0 || cfg->cam_ideal_dist <= 0 || cfg->cam_aperture_radius <= 0 || cfg->cam_true_aperture_radius <= 0) {
                 MCX_ERROR(-1, "Missing or invalid camera parameters!");
             }
     }

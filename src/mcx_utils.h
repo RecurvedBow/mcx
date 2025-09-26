@@ -285,6 +285,7 @@ typedef struct MCXConfig {
     float cam_focal_length;      /**< Cam focal length in voxel units*/
     float cam_aperture_radius;          /**< Camera aperture size in voxel units*/
     float cam_ideal_dist;        /**< Ideal camera distance to set volume size as 1*/
+    float cam_true_aperture_radius; /**< The true camera aperture size in voxel units. Only used in Backtrack mode*/
 } Config;
 
 #ifdef  __cplusplus
