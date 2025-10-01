@@ -351,9 +351,9 @@ __device__ inline void updatestokes(Stokes* s, float theta, float phi, float3* u
     s->i = 1.f;
 }
 
-__device__ inline void map_photon_to_camera_sensor(float camsignals[], MCXpos p0, MCXdir v, MCXpos true_p0)
+__device__ inline void map_photon_to_camera_sensor(float camsignals[], MCXpos p0, MCXdir v, float3 true_p0, RandType t[RAND_BUF_LEN])
 {
-    if (gcfg->cam_proj_dist < 0 || gcfg->cam_aperture_radius < 0)
+    if (gcfg->cam_obj_dist < 0 || gcfg->cam_aperture_radius < 0)
     {
         return;
     }
@@ -396,29 +396,37 @@ __device__ inline void map_photon_to_camera_sensor(float camsignals[], MCXpos p0
     }
 
     bool is_backtrack = gcfg->cam_ideal_dist > 0;
+    int voxel_x = 0, voxel_y = 0;
 
     if (is_backtrack)
     {
         // Backtrack
-        float true_dist = gcfg->cam_ideal_dist + true_p0.z
-        float field_dim_x = dim_x * gcfg->cam_ideal_dist / true_dist
-        float field_dim_y = dim_y * gcfg->cam_ideal_dist / true_dist
-        float2 position_on_image = {
-            dim_x * ((2 * true_p0.x - field_dim_x) / field_dim_x + 0.5),
-            dim_y * ((2 * true_p0.y - field_dim_y) / field_dim_y + 0.5)
+        float true_dist = gcfg->cam_ideal_dist + true_p0.z;
+
+        float2 p_on_plane_shifted = {
+            true_p0.x - 0.5f * dim_x,
+            true_p0.y - 0.5f * dim_y
+        };
+        float2 p_on_ideal_plane_shifted = {
+            p_on_plane_shifted.x * gcfg->cam_ideal_dist / true_dist,
+            p_on_plane_shifted.y * gcfg->cam_ideal_dist / true_dist
         };  // Determined by hand
-        
+        float2 position_on_image = {
+            p_on_ideal_plane_shifted.x + 0.5f * dim_x,
+            p_on_ideal_plane_shifted.y + 0.5f * dim_y
+        };
+
         // Adds the effect of Circle of Confusion (CoC)
-        float coc_radius = gcfg->cam_true_aperture_radius * absf(true_dist - gcfg->cam_ideal_dist) / true_dist; 
-        float random_angle = rand_uniform01() * 2.f * M_PI;
-        float random_radius = rand_uniform01() * coc_radius;
+        float coc_radius = gcfg->cam_true_aperture_radius * fabsf(true_dist - gcfg->cam_ideal_dist) / true_dist; 
+        float random_angle = rand_uniform01(t) * 2.f * M_PI;
+        float random_radius = rand_uniform01(t) * coc_radius;
         float2 coc_shift = {
             random_radius * cosf(random_angle),
             random_radius * sinf(random_angle)
         };
 
-        int voxel_x = floorf(position_on_image.x + coc_shift.x);
-        int voxel_y = floorf(position_on_image.y + coc_shift.x);
+        voxel_x = floorf(position_on_image.x + coc_shift.x);
+        voxel_y = floorf(position_on_image.y + coc_shift.y);
     }
     else
     {
@@ -449,15 +457,14 @@ __device__ inline void map_photon_to_camera_sensor(float camsignals[], MCXpos p0
             p_on_sensor_shifted.y / lens_magnification + sensor_center.y,
         };
 
-        int voxel_x = floorf(p_on_sensor_corrected.x);
-        int voxel_y = floorf(p_on_sensor_corrected.y);
+        voxel_x = floorf(p_on_sensor_corrected.x);
+        voxel_y = floorf(p_on_sensor_corrected.y);
     }
 
     if (voxel_x < 0 || voxel_x >= dim_x || voxel_y < 0 || voxel_y >= dim_y)
     {
         return;
     }
-    
     int index = dim_x * voxel_y + voxel_x;
 
     if (index >= gcfg->dimlen.y)
@@ -948,6 +955,11 @@ __device__ int reflectray(float n1, float3* c0, float3* rv, MCXsp* nuvox, Medium
     return 0;
 }
 
+__device__ bool is_air_voxel(float mua, float mus, float g, float n)
+{
+    return mua <= 1e-4 && mus <= 1e-4 && fabsf(g - 1) <= 1e-2 && fabsf(n - 1) <= 1e-2;
+}
+
 /**
  * @brief Loading optical properties from constant memory
  *
@@ -1186,7 +1198,7 @@ __device__ inline void rotatevector(MCXdir* v, float stheta, float ctheta, float
  */
 
 template <const int ispencil, const int isreflect, const int islabel, const int issvmc, const int ispolarized>
-__device__ inline int launchnewphoton(MCXpos* p, MCXdir* v, MCXpos* true_p, Stokes* s, MCXtime* f, float3* rv, short flipdir[4], Medium* prop, uint* idx1d, OutputType* field,
+__device__ inline int launchnewphoton(MCXpos* p, MCXdir* v, float3* true_p, Stokes* s, MCXtime* f, float3* rv, short flipdir[4], Medium* prop, uint* idx1d, OutputType* field,
                                       uint* mediaid, OutputType* w0, uint isdet, float ppath[], float n_det[], float camsignals[], uint* dpnum,
                                       RandType t[RAND_BUF_LEN], RandType photonseed[RAND_BUF_LEN],
                                       uint media[], float srcpattern[], int threadid, RandType rngseed[], RandType seeddata[], float gdebugdata[], volatile int gprogress[],
@@ -1270,7 +1282,7 @@ __device__ inline int launchnewphoton(MCXpos* p, MCXdir* v, MCXpos* true_p, Stok
             }
         }
 
-        map_photon_to_camera_sensor(camsignals, *p, *v, *true_p);
+        map_photon_to_camera_sensor(camsignals, *p, *v, *true_p, t);
 
 #ifdef SAVE_DETECTORS
 
@@ -1791,7 +1803,10 @@ __device__ inline int launchnewphoton(MCXpos* p, MCXdir* v, MCXpos* true_p, Stok
         gprogress[0]++;
     }
 
-    true_p = {-1.f, -1.f, -1.f};
+    true_p->x = -1.f;
+    true_p->y = -1.f;
+    true_p->z = -1.f;
+
     return 0;
 }
 
@@ -1855,8 +1870,7 @@ __global__ void mcx_main_loop(uint media[], OutputType field[], OutputType camsi
     MCXpos  p = {0.f, 0.f, 0.f, CUDA_NAN_F}; //< Photon position state: {x,y,z}: coordinates in grid unit, w:packet weight
     MCXdir  v = {0.f, 0.f, 0.f, 0.f}; //< Photon direction state: {x,y,z}: unitary direction vector in grid unit, nscat:total scat event
     MCXtime f = {0.f, 0.f, 0.f, -1.f}; //< Photon parameter state: pscat: remaining scattering probability,t: photon elapse time, pathlen: total pathlen in one voxel, ndone: completed photons
-    float3 true_p = {-1.f, -1.f, -1.f}; 
-    float previous_mua = -1.0;
+    float3 true_p = {-1.f, -1.f, -1.f}; //< The last photon position within or on the tissue. Used to track where the photon last left the tissue for image reconstruction (= Backtracking)
 
     MCXsp nuvox;
     Stokes s;
@@ -2221,12 +2235,12 @@ __global__ void mcx_main_loop(uint media[], OutputType field[], OutputType camsi
         p.w *= expf(-prop.mua * len);
 #endif
 
-        /** Do not update true_p if this is an air voxel (mua < 1e-8) */
-        if (prop.mua > 1e-8)
+        /** Do not update true_p if this is an air voxel (mua < 1e-4) */
+        if (!is_air_voxel(prop.mua, prop.mus, prop.g, prop.n))
         {
-            true_p = p;
+            true_p = {p.x, p.y, p.z};
         }
-        
+
         /** remaining unitless scattering length: sum(s_i*mus_i), unit-less */
         f.pscat -= slen;
 
@@ -2527,7 +2541,6 @@ __global__ void mcx_main_loop(uint media[], OutputType field[], OutputType camsi
                             savedebugdata(&p, (uint)f.ndone + idx * gcfg->threadphoton + umin(idx, gcfg->oddphotons), gdebugdata, (int)ppath[gcfg->w0offset - 1]);
                         }
                     }
-
                     if (Rtotal < 1.f // if total internal reflection does not happen
                             && (!(mediaid == 0 && ((isdet & 0xF) == bcMirror))) // if out of bbx and cfg.bc is not 'm'
                             && rand_next_reflect(t) > Rtotal) { // and if photon chooses the transmission path, then do transmission
@@ -2556,6 +2569,9 @@ __global__ void mcx_main_loop(uint media[], OutputType field[], OutputType camsi
                         GPUDEBUG(("do transmission\n"));
                         rv = float3(__fdividef(1.f, v.x), __fdividef(1.f, v.y), __fdividef(1.f, v.z));
                     } else { //< do reflection
+                        // If reflection happens, one of the two media is not air, therefore true_p has to be updated.
+                        true_p = {p.x, p.y, p.z};
+
                         GPUDEBUG(("ref faceid=%d p=[%f %f %f] v_old=[%f %f %f]\n", flipdir[3], p.x, p.y, p.z, v.x, v.y, v.z));
                         (flipdir[3] == 0) ? (v.x = -v.x) : ((flipdir[3] == 1) ? (v.y = -v.y) : (v.z = -v.z)) ;
                         rv = float3(__fdividef(1.f, v.x), __fdividef(1.f, v.y), __fdividef(1.f, v.z));
@@ -3787,7 +3803,7 @@ is more than what your have specified (%d), please use the -H option to specify 
                 }
             }
         
-            if (cfg->cam_proj_dist > 0)
+            if (cfg->cam_obj_dist > 0)
             {
                 if (cfg->respin > 1)
                 {
