@@ -52,6 +52,7 @@
 #define MAX_PATH_LENGTH     1024                         /**< max characters in a full file name string */
 #define MAX_SESSION_LENGTH  256                          /**< max session name length */
 #define MAX_DEVICE          256                          /**< max number of GPUs to be used */
+#define MAX_LANG_ID         32                           /**< max number of characters in the language code */
 
 #define MCX_CUDA_ERROR_LAUNCH_FAILED    719              /**< CUDA kernel launch error code */
 
@@ -259,6 +260,7 @@ typedef struct MCXConfig {
     float workload[MAX_DEVICE];  /**<an array storing the relative weight when distributing photons between multiple GPUs*/
     int parentid;                /**<flag for testing if mcx is executed inside matlab*/
     unsigned int runtime;        /**<variable to store the total kernel simulation time in ms*/
+    char langid[MAX_LANG_ID];    /**<lanage id, a string*/
 
     double energytot;            /**<total launched photon packet weights*/
     double energyabs;            /**<total absorbed photon packet weights*/
@@ -320,6 +322,7 @@ void mcx_convertcol2row(unsigned int** vol, uint3* dim);
 void mcx_convertcol2row4d(unsigned int** vol, uint4* dim);
 int  mcx_loadjson(cJSON* root, Config* cfg);
 int  mcx_keylookup(char* key, const char* table[]);
+int  mcx_keystartwith(char* key, const char* table[]);
 int  mcx_lookupindex(char* key, const char* index);
 int  mcx_parsedebugopt(char* debugopt, const char* debugflag);
 void mcx_savedetphoton(float* ppath, void* seeds, int count, int seedbyte, Config* cfg);
@@ -342,6 +345,10 @@ void mcx_prep_polarized(Config* cfg);
 void mcx_replayinit(Config* cfg, float* detps, int dimdetps[2], int seedbyte);
 void mcx_validatecfg(Config* cfg, float* detps, int dimdetps[2], int seedbyte);
 int  mcx_float2half2(float input[2]);
+cJSON* mcx_parsejson(const char* jbuf);
+
+extern cJSON* mcx_lang;       /**< JSON object holding the translations of the specified language */
+char* T_(const char* str);    /**< string translation function */
 
 #ifdef MCX_CONTAINER
 #ifdef __cplusplus

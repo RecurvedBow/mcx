@@ -10,7 +10,7 @@
 
 #define MyAppName "MCX Studio"
 #define MyAppDir "MCXStudio"
-#define MyAppVersion "v2025.6.pre"
+#define MyAppVersion "v2025.9"
 #define MyAppPublisher "COTILab"
 #define MyAppURL "https://mcx.space"
 #define MyAppExeName "mcxstudio.exe"
@@ -40,6 +40,7 @@ SolidCompression=yes
 WizardStyle=modern
 ChangesEnvironment=true
 SetupIconFile=mcxstudio_2023.ico
+ShowLanguageDialog=yes
 ArchitecturesInstallIn64BitMode=x64
 DefaultGroupName="{#MyAppName} {#MyAppVersion}"
 VersionInfoCompany={#MyAppPublisher}
@@ -50,6 +51,17 @@ UninstallDisplayIcon={app}\{#MyAppExeName}
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
+Name: "french"; MessagesFile: "compiler:Languages\French.isl"
+Name: "german"; MessagesFile: "compiler:Languages\German.isl"
+Name: "spanish"; MessagesFile: "compiler:Languages\Spanish.isl"
+Name: "spanish"; MessagesFile: "compiler:Languages\Spanish.isl"
+Name: "italian"; MessagesFile: "compiler:Languages\Italian.isl"
+Name: "japanese"; MessagesFile: "compiler:Languages\Japanese.isl"
+Name: "korean"; MessagesFile: "compiler:Languages\Korean.isl"
+Name: "portuguese"; MessagesFile: "compiler:Languages\BrazilianPortuguese.isl"
+;Name: "hindi"; MessagesFile: "compiler:Languages\Hindi.isl"
+Name: "chinesesimplified"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
+Name: "chinesetraditional"; MessagesFile: "compiler:Languages\ChineseTraditional.isl"
 
 ;;----------------------------------------------------------------------
 
@@ -69,6 +81,7 @@ Name: "{app}\MCXSuite"
 Source: "..\mcxstudio.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\MCXSuite\mcx\bin\mcxshow.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\MCXSuite\mcx\bin\mcxviewer.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\locale\*"; DestDir: "{app}\locale"; Flags: ignoreversion
 Source: "..\plink.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\pscp.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\README.txt"; DestDir: "{app}"; Flags: ignoreversion
@@ -81,8 +94,8 @@ Source: "..\MCXSuite\mmc\matlab\*"; DestDir: "{code:GetMatlabToolboxLocalPath}\m
 ;;----------------------------------------------------------------------
 
 [Icons]
-Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Parameters: "--user"
-Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}";  Parameters: "--user"; Tasks: desktopicon
+Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Parameters: "--user --lang={code:GetLanguageCode}"
+Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}";  Parameters: "--user --lang={code:GetLanguageCode}"; Tasks: desktopicon
 Name: "{group}\MCX Website"; Filename: "https://mcx.space/"
 Name: "{group}\MCX Wiki"; Filename: "https://mcx.space/wiki/"
 Name: "{group}\MCX Forum"; Filename: "https://groups.google.com/forum/?hl=en#!forum/mcx-users"
@@ -97,12 +110,13 @@ Name: "{group}\MCX Forum"; Filename: "https://groups.google.com/forum/?hl=en#!fo
 Root: HKA; Subkey: "Software\COTILab"; Flags: uninsdeletekeyifempty
 Root: HKA; Subkey: "Software\COTILab\MCXStudio"; Flags: uninsdeletekey
 Root: HKA; Subkey: "Software\COTILab\MCXStudio\Settings"; ValueType: string; ValueName: "Language"; ValueData: "{language}"
+Root: HKA; Subkey: "Software\COTILab\MCXStudio\Settings"; ValueType: string; ValueName: "LanguageCode"; ValueData: "{code:GetLanguageCode}"
 ; Associate .mcxp files with My Program (requires ChangesAssociations=yes)
 Root: HKA; Subkey: "Software\Classes\.mcxp"; ValueType: string; ValueName: ""; ValueData: "MCXStudio.mcxp"; Flags: uninsdeletevalue
 Root: HKA; Subkey: "Software\Classes\.mcxp\OpenWithProgids"; ValueType: string; ValueName: "MCXStudio.mcxp"; ValueData: ""; Flags: uninsdeletevalue
 Root: HKA; Subkey: "Software\Classes\MCXStudio.mcxp"; ValueType: string; ValueName: ""; ValueData: "MCXStudio"; Flags: uninsdeletekey
 Root: HKA; Subkey: "Software\Classes\MCXStudio.mcxp\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\mcxstudio.exe,0"
-Root: HKA; Subkey: "Software\Classes\MCXStudio.mcxp\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\mcxstudio.exe"" ""%1"""
+Root: HKA; Subkey: "Software\Classes\MCXStudio.mcxp\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\mcxstudio.exe"" ""--user"" ""--lang={code:GetLanguageCode}"" ""%1"""
 ; HKA (and HKCU) should only be used for settings which are compatible with
 ; roaming profiles so settings like paths should be written to HKLM, which
 ; is only possible in administrative install mode.
@@ -120,7 +134,7 @@ Root: HKLM; Subkey: "System\CurrentControlSet\Control\GraphicsDrivers"; ValueTyp
 ;;----------------------------------------------------------------------
 
 [Run]
-Filename: "{app}\{#MyAppExeName}"; Parameters: "--user"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#MyAppExeName}"; Parameters: "--user --lang={code:GetLanguageCode}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
 
 ;;----------------------------------------------------------------------
 
@@ -142,6 +156,27 @@ begin
     Result := ExpandConstant('{app}') + '\MATLAB';
   end;
   Log(Format('MCX Toolbox Path found at %s', [Result]));
+end;
+
+// Function to convert installer language to application language code
+function GetLanguageCode(Param: string): string;
+begin
+  case ActiveLanguage of
+    'english': Result := 'en-us';
+    'french': Result := 'fr';
+    'german': Result := 'de';
+    'spanish': Result := 'es';
+    'italian': Result := 'it';
+    'japanese': Result := 'ja';
+    'korean': Result := 'ko';
+    'portuguese': Result := 'pt';
+    'hindi': Result := 'hi';
+    'chinesesimplified': Result := 'zh-cn';
+    'chinesetraditional': Result := 'zh-tw';
+  else
+    Result := 'en-us'; // Default fallback
+  end;
+  Log(Format('Language code selected: %s', [Result]));
 end;
 
 function InitializeSetup(): Boolean;
@@ -348,3 +383,4 @@ begin
            );
     end;
 end;
+

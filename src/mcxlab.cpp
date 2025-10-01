@@ -42,6 +42,7 @@
 #include "mcx_utils.h"
 #include "mcx_core.h"
 #include "mcx_shapes.h"
+#include "mcx_lang.h"
 
 #ifdef _OPENMP
     #include <omp.h>
@@ -77,6 +78,8 @@
 #define SET_GPU_INFO(output,id,v)  mxSetField(output,id,#v,mxCreateDoubleScalar(gpuinfo[i].v));
 
 typedef mwSize dimtype;
+
+extern cJSON* mcx_lang;
 
 void mcx_set_field(const mxArray* root, const mxArray* item, int idx, Config* cfg);
 void mcxlab_usage();
@@ -1172,7 +1175,7 @@ void mcx_set_field(const mxArray* root, const mxArray* item, int idx, Config* cf
 
         cfg->invcdf[0] = -1.f;
         cfg->invcdf[cfg->nphase - 1] = 1.f;
-        printf("mcx.invcdf=[%ld];\n", cfg->nphase);
+        printf("mcx.invcdf=[%d];\n", cfg->nphase);
     } else if (strcmp(name, "angleinvcdf") == 0) {
         dimtype nangle = mxGetNumberOfElements(item);
         double* val = mxGetPr(item);
@@ -1192,7 +1195,7 @@ void mcx_set_field(const mxArray* root, const mxArray* item, int idx, Config* cf
             }
         }
 
-        printf("mcx.angleinvcdf=[%ld];\n", cfg->nangle);
+        printf("mcx.angleinvcdf=[%d];\n", cfg->nangle);
     } else if (strcmp(name, "shapes") == 0) {
         int len = mxGetNumberOfElements(item);
 
@@ -1323,6 +1326,32 @@ void mcx_set_field(const mxArray* root, const mxArray* item, int idx, Config* cf
         }
 
         printf("mcx.flog=%d;\n", cfg->flog);
+    } else if (strcmp(name, "lang") == 0) {
+        int len = mxGetNumberOfElements(item);
+        char langid[32] = {'\0'};
+
+        if (!mxIsChar(item) || len == 0) {
+            mexErrMsgTxt("the 'lang' field must be a non-empty string");
+        }
+
+        if (len > 5) {
+            mexErrMsgTxt("the 'lang' field is too long");
+        }
+
+        int status = mxGetString(item, langid, 32);
+
+        if (status != 0) {
+            mexWarnMsgTxt("not enough space. string is truncated.");
+        }
+
+        int idx = mcx_keylookup(langid, languagename);
+
+        if (idx == -1) {
+            mexErrMsgTxt(T_("Unsupported language"));
+        }
+
+        mcx_lang = cJSON_Parse(translations[idx]);
+        printf("mcx.lang='%s';\n", langid);
     } else {
         printf(S_RED "WARNING: redundant field '%s'\n" S_RESET, name);
     }

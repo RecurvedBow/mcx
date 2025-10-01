@@ -79,7 +79,7 @@ CPPFLAGS+=-g -Wall #-pedantic #-DNO_LZMA # -DUSE_OS_TIMER
 OBJSUFFIX=.o
 EXESUFFIX=
 
-FILES=mcx_core mcx_utils mcx_shapes mcx_tictoc mcx mcx_bench mcx_neurojson mcx_mie cjson/cJSON ubj/ubjw
+FILES=mcx_core mcx_utils mcx_shapes mcx_tictoc mcx mcx_bench mcx_neurojson mcx_mie mcx_lang cjson/cJSON ubj/ubjw
 
 ifeq ($(findstring _NT-,$(PLATFORM)), _NT-)
   CC=nvcc
@@ -100,7 +100,7 @@ ifeq ($(findstring _NT-,$(PLATFORM)), _NT-)
   ifeq ($(findstring CYGWIN,$(PLATFORM)), CYGWIN)
       MEX=cmd /c mex COMPFLAGS='-MT'
   else
-      MEX=cmd //s //c mex COMPFLAGS='-MT'
+      MEX=cmd //s //c mex -v COMPFLAGS='-MT'
   endif
   NVCCOMP=$(CUOMPLINK) "$(OMP)"
   CUCCOPT+=$(NVCCOMP)
@@ -137,14 +137,14 @@ endif
 
 
 ifneq (,$(filter mex,$(MAKECMDGOALS)))
-  FILES=mcx_core mcx_utils mcx_shapes mcx_tictoc mcx_bench mcx_mie cjson/cJSON
+  FILES=mcx_core mcx_utils mcx_shapes mcx_tictoc mcx_bench mcx_mie mcx_lang cjson/cJSON
   ZMATLIB=
   USERLINKOPT=
   ZLIBFLAG=
 endif
 
 ifneq (,$(filter oct,$(MAKECMDGOALS)))
-  FILES=mcx_core mcx_utils mcx_shapes mcx_tictoc mcx_bench mcx_mie cjson/cJSON
+  FILES=mcx_core mcx_utils mcx_shapes mcx_tictoc mcx_bench mcx_mie mcx_lang cjson/cJSON
   ZMATLIB=
   USERLINKOPT=
   ZLIBFLAG=
@@ -234,7 +234,7 @@ static:     CUOMPLINK=-Xcompiler
 static:     LINKOPT=$(CUDA_STATIC)
 
 fermimex:   AR=$(MEX)
-fermimex:   LINKOPT+= CXXFLAGS='$$CXXFLAGS -g -DSAVE_DETECTORS -DMCX_CONTAINER -DMATLAB_MEX_FILE $(OMP) $(MEXCCOPT) $(USERCCOPT)' LINKLIBS="$(MEXLINKLIBS) $(MEXLINKOPT)" CXXLIBS='$$CXXLIBS $(MEXLINKOPT)' LDFLAGS='-L$$TMW_ROOT$$MATLABROOT/sys/os/$$ARCH $$LDFLAGS $(OMP) $(USERLINKOPT)'
+fermimex:   LINKOPT+= CXXFLAGS='$$CXXFLAGS -g -DSAVE_DETECTORS -DMCX_CONTAINER -DMATLAB_MEX_FILE $(OMP) $(MEXCCOPT) $(USERCCOPT)' LINKLIBS="$(MEXLINKLIBS) $(MEXLINKOPT)" CXXLIBS='$$CXXLIBS $(MEXLINKOPT)' LDFLAGS='-L"$$MATLABROOT/sys/os/$$ARCH" $$LDFLAGS $(OMP) $(USERLINKOPT)'
 oct fermimex fermioct:    OUTPUT_DIR=../mcxlab
 fermimex:   BINARY=mcx
 fermioct:   BINARY=mcx.mex
@@ -339,6 +339,7 @@ pretty:
 	    --formatted \
 	    --break-blocks \
 	    --exclude=mcx_bench.c \
+		--exclude=mcx_lang.c \
 	   "*.c" "*.h" "*.cpp" "*.cu"
 
 .DEFAULT_GOAL := all

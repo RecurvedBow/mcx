@@ -40,7 +40,7 @@ string(PREPEND OMPFLAG "-Xcompiler ")
 set(
     CUDA_NVCC_FLAGS
     ${CUDA_NVCC_FLAGS};
-    -g -lineinfo -Xcompiler -Wall -Xcompiler -O3 -arch=sm_35
+    -g -lineinfo -Xcompiler -Wall -Xcompiler -O3 -arch=sm_50
     -DMCX_TARGET_NAME="Fermi MCX" -DUSE_ATOMIC -use_fast_math
     -DSAVE_DETECTORS -Xcompiler -fPIC ${OMPFLAG}
     )
@@ -67,6 +67,8 @@ cuda_add_library(mcx STATIC
     mcx_shapes.h
     mcx_bench.c
     mcx_bench.h
+    mcx_lang.c
+    mcx_lang.h
     mcx_mie.cpp
     mcx_mie.h
     mcx_tictoc.c
@@ -105,6 +107,8 @@ if (BUILD_PYTHON)
             mcx_shapes.h
             mcx_bench.c
             mcx_bench.h
+            mcx_lang.c
+            mcx_lang.h
             mcx_mie.cpp
             mcx_mie.h
             mcx_tictoc.c
@@ -136,6 +140,8 @@ if(BUILD_MEX AND Matlab_FOUND)
             mcx_shapes.h
             mcx_bench.c
             mcx_bench.h
+            mcx_lang.c
+            mcx_lang.h
             mcx_mie.cpp
             mcx_mie.h
             mcx_tictoc.c
