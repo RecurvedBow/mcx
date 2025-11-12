@@ -957,6 +957,8 @@ __device__ int reflectray(float n1, float3* c0, float3* rv, MCXsp* nuvox, Medium
 
 __device__ bool is_air_voxel(float mua, float mus, float g, float n)
 {
+    // Note: mua/mus set in prop is mua/mus defined in the volume multiplied by the voxel unit in mm.
+    // Reason is probably that voxel unit in mm is not used exclicitly in the cuda code, and therefore is integrated in the physical parameters directly.
     return mua <= 1e-4 && mus <= 1e-4 && fabsf(g - 1) <= 1e-2 && fabsf(n - 1) <= 1e-2;
 }
 
