@@ -351,7 +351,7 @@ __device__ inline void updatestokes(Stokes* s, float theta, float phi, float3* u
     s->i = 1.f;
 }
 
-__device__ inline void map_photon_to_camera_sensor(float camsignals[], MCXpos p0, MCXdir v, float3 true_p0, RandType t[RAND_BUF_LEN])
+__device__ inline void map_photon_to_camera_sensor(float camsignals[], float3 true_p0, MCXdir v, float photon_weight, int3 reflection_data, RandType t[RAND_BUF_LEN])
 {
     if (gcfg->cam_obj_dist < 0 || gcfg->cam_aperture_radius < 0)
     {
@@ -364,6 +364,39 @@ __device__ inline void map_photon_to_camera_sensor(float camsignals[], MCXpos p0
         return;
     }
 
+    if (reflection_data.z >= 1)
+    {
+        // Has more than one reflection -> Would never arrive at the image
+        return;
+    }
+
+    // Todo: Check if x refers to width or height.
+    uint dim_x = gcfg->dimlen.x;
+    uint dim_y = roundf(gcfg->dimlen.y / gcfg->dimlen.x);
+
+    if (reflection_data.x != 0)
+    {
+        if (reflection_data.x == -1)
+        {
+            true_p0.x *= -1;  // Left side
+        }
+        else
+        {
+            true_p0.x = 2 * dim_x - true_p0.x;  // Right side
+        }
+    }
+    if (reflection_data.y != 0)
+    {
+        if (reflection_data.y == -1)
+        {
+            true_p0.y *= -1;  // Up side
+        }
+        else
+        {
+            true_p0.y = 2 * dim_y - true_p0.y;  // Down side
+        }
+    }
+
     atomicAdd(&camsignals[gcfg->dimlen.y], 1);
 
     // Normalize direction vector.
@@ -373,15 +406,12 @@ __device__ inline void map_photon_to_camera_sensor(float camsignals[], MCXpos p0
     v.z *= tmp0;
 
     // Project photon to lens.
-    float t_lens = (gcfg->cam_obj_dist + p0.z) / fabsf(v.z);
+    float t_lens = (gcfg->cam_obj_dist + true_p0.z) / fabsf(v.z);
     float2 p_on_lens = {
-        p0.x + v.x * t_lens,
-        p0.y + v.y * t_lens
+        true_p0.x + v.x * t_lens,
+        true_p0.y + v.y * t_lens
     };
     
-    // Todo: Check if x refers to width or height.
-    uint dim_x = gcfg->dimlen.x;
-    uint dim_y = roundf(gcfg->dimlen.y / gcfg->dimlen.x);
     float2 lens_center = {dim_x / 2.f, dim_y / 2.f};
 
     float2 distance_p_on_lens_to_lens_center = {
@@ -473,7 +503,7 @@ __device__ inline void map_photon_to_camera_sensor(float camsignals[], MCXpos p0
         return;
     }
 
-    atomicAdd(&camsignals[index], p0.w);
+    atomicAdd(&camsignals[index], photon_weight);
 
     atomicAdd(&camsignals[gcfg->dimlen.y + 1], 1);
 }
@@ -1200,7 +1230,7 @@ __device__ inline void rotatevector(MCXdir* v, float stheta, float ctheta, float
  */
 
 template <const int ispencil, const int isreflect, const int islabel, const int issvmc, const int ispolarized>
-__device__ inline int launchnewphoton(MCXpos* p, MCXdir* v, float3* true_p, Stokes* s, MCXtime* f, float3* rv, short flipdir[4], Medium* prop, uint* idx1d, OutputType* field,
+__device__ inline int launchnewphoton(MCXpos* p, MCXdir* v, float3* true_p, int3* reflection_data, Stokes* s, MCXtime* f, float3* rv, short flipdir[4], Medium* prop, uint* idx1d, OutputType* field,
                                       uint* mediaid, OutputType* w0, uint isdet, float ppath[], float n_det[], float camsignals[], uint* dpnum,
                                       RandType t[RAND_BUF_LEN], RandType photonseed[RAND_BUF_LEN],
                                       uint media[], float srcpattern[], int threadid, RandType rngseed[], RandType seeddata[], float gdebugdata[], volatile int gprogress[],
@@ -1284,7 +1314,7 @@ __device__ inline int launchnewphoton(MCXpos* p, MCXdir* v, float3* true_p, Stok
             }
         }
 
-        map_photon_to_camera_sensor(camsignals, *p, *v, *true_p, t);
+        map_photon_to_camera_sensor(camsignals, *true_p, *v, p->w, *reflection_data, t);
 
 #ifdef SAVE_DETECTORS
 
@@ -1813,6 +1843,9 @@ __device__ inline int launchnewphoton(MCXpos* p, MCXdir* v, float3* true_p, Stok
     true_p->y = -1.f;
     true_p->z = -1.f;
 
+    reflection_data->x = 0;
+    reflection_data->y = 0;
+    reflection_data->z = 0;
     return 0;
 }
 
@@ -1877,6 +1910,11 @@ __global__ void mcx_main_loop(uint media[], OutputType field[], OutputType camsi
     MCXdir  v = {0.f, 0.f, 0.f, 0.f}; //< Photon direction state: {x,y,z}: unitary direction vector in grid unit, nscat:total scat event
     MCXtime f = {0.f, 0.f, 0.f, -1.f}; //< Photon parameter state: pscat: remaining scattering probability,t: photon elapse time, pathlen: total pathlen in one voxel, ndone: completed photons
     float3 true_p = {-1.f, -1.f, -1.f}; //< The last photon position within or on the tissue. Used to track where the photon last left the tissue for image reconstruction (= Backtracking)
+    int3 reflection_data = {0, 0, 0};  //< The reflection axis of the first reflection, and the amount of reflections
+
+    uint dim_x = gcfg->dimlen.x;
+    uint dim_y = roundf(gcfg->dimlen.y / gcfg->dimlen.x);
+    uint dim_z = roundf(gcfg->dimlen.z / dim_y / dim_x);
 
     MCXsp nuvox;
     Stokes s;
@@ -1962,7 +2000,7 @@ __global__ void mcx_main_loop(uint media[], OutputType field[], OutputType camsi
      * Launch the first photon
      */
 
-    if (launchnewphoton<ispencil, isreflect, islabel, issvmc, ispolarized>(&p, &v, &true_p, &s, &f, &rv, flipdir, &prop, &idx1d, field, &mediaid, &w0, 0, ppath,
+    if (launchnewphoton<ispencil, isreflect, islabel, issvmc, ispolarized>(&p, &v, &true_p, &reflection_data, &s, &f, &rv, flipdir, &prop, &idx1d, field, &mediaid, &w0, 0, ppath,
             n_det, camsignals, detectedphoton, t, (RandType*)(sharedmem + sizeof(float) * (gcfg->nphaselen + gcfg->nanglelen) + threadIdx.x * gcfg->issaveseed * RAND_BUF_LEN * sizeof(RandType)), media, srcpattern,
             idx, (RandType*)n_seed, seeddata, gdebugdata, gprogress, photontof, &nuvox)) {
         GPUDEBUG(("thread %d: fail to launch photon\n", idx));
@@ -2245,6 +2283,7 @@ __global__ void mcx_main_loop(uint media[], OutputType field[], OutputType camsi
         if (!is_air_voxel(prop.mua, prop.mus, prop.g, prop.n))
         {
             true_p = {p.x, p.y, p.z};
+            reflection_data = {0, 0, 0};
         }
 
         /** remaining unitless scattering length: sum(s_i*mus_i), unit-less */
@@ -2443,7 +2482,7 @@ __global__ void mcx_main_loop(uint media[], OutputType field[], OutputType camsi
 
             GPUDEBUG(("direct relaunch at idx=[%d] mediaid=[%d], ref=[%d] bcflag=%d timegate=%d\n", idx1d, mediaid, gcfg->doreflect, isdet, f.t > gcfg->twin1));
 
-            if (launchnewphoton<ispencil, isreflect, islabel, issvmc, ispolarized>(&p, &v, &true_p, &s, &f, &rv, flipdir, &prop, &idx1d, field, &mediaid, &w0,
+            if (launchnewphoton<ispencil, isreflect, islabel, issvmc, ispolarized>(&p, &v, &true_p, &reflection_data, &s, &f, &rv, flipdir, &prop, &idx1d, field, &mediaid, &w0,
                     (((idx1d == OUTSIDE_VOLUME_MAX && gcfg->bc[9 + flipdir[3]]) || (idx1d == OUTSIDE_VOLUME_MIN && gcfg->bc[6 + flipdir[3]])) ? OUTSIDE_VOLUME_MIN : (mediaidold & DET_MASK)),
                     ppath, n_det, camsignals, detectedphoton, t, (RandType*)(sharedmem + sizeof(float) * (gcfg->nphaselen + gcfg->nanglelen) + threadIdx.x * gcfg->issaveseed * RAND_BUF_LEN * sizeof(RandType)),
                     media, srcpattern, idx, (RandType*)n_seed, seeddata, gdebugdata, gprogress, photontof, &nuvox)) {
@@ -2467,7 +2506,7 @@ __global__ void mcx_main_loop(uint media[], OutputType field[], OutputType camsi
             } else {
                 GPUDEBUG(("relaunch after Russian roulette at idx=[%d] mediaid=[%d], ref=[%d]\n", idx1d, mediaid, gcfg->doreflect));
 
-                if (launchnewphoton<ispencil, isreflect, islabel, issvmc, ispolarized>(&p, &v, &true_p, &s, &f, &rv, flipdir, &prop, &idx1d, field, &mediaid, &w0, (mediaidold & DET_MASK), ppath,
+                if (launchnewphoton<ispencil, isreflect, islabel, issvmc, ispolarized>(&p, &v, &true_p, &reflection_data, &s, &f, &rv, flipdir, &prop, &idx1d, field, &mediaid, &w0, (mediaidold & DET_MASK), ppath,
                         n_det, camsignals, detectedphoton, t, (RandType*)(sharedmem + sizeof(float) * (gcfg->nphaselen + gcfg->nanglelen) + threadIdx.x * gcfg->issaveseed * RAND_BUF_LEN * sizeof(RandType)),
                         media, srcpattern, idx, (RandType*)n_seed, seeddata, gdebugdata, gprogress, photontof, &nuvox)) {
                     break;
@@ -2495,7 +2534,7 @@ __global__ void mcx_main_loop(uint media[], OutputType field[], OutputType camsi
                     nuvox.nv = -nuvox.nv; // flip normal vector back for reflection/refraction computation
 
                     if (reflectray(n1, (float3*) & (v), &rv, &nuvox, &prop, t)) { // true if photon transmits to background media
-                        if (launchnewphoton<ispencil, isreflect, islabel, issvmc, ispolarized>(&p, &v, &true_p, &s, &f, &rv, flipdir, &prop, &idx1d, field, &mediaid, &w0, (mediaidold & DET_MASK),
+                        if (launchnewphoton<ispencil, isreflect, islabel, issvmc, ispolarized>(&p, &v, &true_p, &reflection_data, &s, &f, &rv, flipdir, &prop, &idx1d, field, &mediaid, &w0, (mediaidold & DET_MASK),
                                 ppath, n_det, camsignals, detectedphoton, t, (RandType*)(sharedmem + sizeof(float) * (gcfg->nphaselen + gcfg->nanglelen) + threadIdx.x * gcfg->issaveseed * RAND_BUF_LEN * sizeof(RandType)),
                                 media, srcpattern, idx, (RandType*)n_seed, seeddata, gdebugdata, gprogress, photontof, &nuvox)) {
                             break;
@@ -2554,7 +2593,7 @@ __global__ void mcx_main_loop(uint media[], OutputType field[], OutputType camsi
                         if (mediaid == 0 || (issvmc && (nuvox.sv.isupper ? nuvox.sv.upper : nuvox.sv.lower) == 0)) { // transmission to external boundary
                             GPUDEBUG(("transmit to air, relaunch\n"));
 
-                            if (launchnewphoton<ispencil, isreflect, islabel, issvmc, ispolarized>(&p, &v, &true_p, &s, &f, &rv, flipdir, &prop, &idx1d, field, &mediaid, &w0,
+                            if (launchnewphoton<ispencil, isreflect, islabel, issvmc, ispolarized>(&p, &v, &true_p, &reflection_data, &s, &f, &rv, flipdir, &prop, &idx1d, field, &mediaid, &w0,
                                     (((idx1d == OUTSIDE_VOLUME_MAX && gcfg->bc[9 + flipdir[3]]) || (idx1d == OUTSIDE_VOLUME_MIN && gcfg->bc[6 + flipdir[3]])) ? OUTSIDE_VOLUME_MIN : (mediaidold & DET_MASK)),
                                     ppath, n_det, camsignals, detectedphoton, t, (RandType*)(sharedmem + sizeof(float) * (gcfg->nphaselen + gcfg->nanglelen) + threadIdx.x * gcfg->issaveseed * RAND_BUF_LEN * sizeof(RandType)),
                                     media, srcpattern, idx, (RandType*)n_seed, seeddata, gdebugdata, gprogress, photontof, &nuvox)) {
@@ -2574,8 +2613,44 @@ __global__ void mcx_main_loop(uint media[], OutputType field[], OutputType camsi
                         GPUDEBUG(("do transmission\n"));
                         rv = float3(__fdividef(1.f, v.x), __fdividef(1.f, v.y), __fdividef(1.f, v.z));
                     } else { //< do reflection
-                        // If reflection happens, one of the two media is not air, therefore true_p has to be updated.
-                        true_p = {p.x, p.y, p.z};
+                        if (mediaid == 0 && p.z > 1e-4 && ((isdet & 0xF) == bcMirror))
+                        {
+                            bool is_refl_left = p.x <= 1e-4;
+                            bool is_refl_right = p.x >= dim_x - 1e-4;
+                            bool is_refl_up = p.y <= 1e-4;
+                            bool is_refl_down = p.y >= dim_y - 1e-4;
+                            if (is_refl_left || is_refl_right)
+                            {
+                                if (reflection_data.x == 0)
+                                {
+                                     reflection_data.x = is_refl_left ? -1 : 1;
+                                }
+                                else
+                                {
+                                    reflection_data.z = 1;
+                                }
+                            }
+                            else if (is_refl_up || is_refl_down)
+                            {
+                                if (reflection_data.y == 0)
+                                {
+                                     reflection_data.y = is_refl_up ? -1 : 1;
+                                }
+                                else
+                                {
+                                    reflection_data.z = 1;
+                                }
+                            }
+                            else
+                            {
+                                printf("Should not happen! (%.2f, %.2f, %.2f)\n", p.x, p.y, p.z);
+                            }
+                        }
+                        else if (!is_air_voxel(prop.mua, prop.mus, prop.g, prop.n))
+                        {
+                            // If reflection happens, one of the two media is not air, therefore true_p has to be updated (unless the photon was mirrored).
+                            true_p = {p.x, p.y, p.z};
+                        }
 
                         GPUDEBUG(("ref faceid=%d p=[%f %f %f] v_old=[%f %f %f]\n", flipdir[3], p.x, p.y, p.z, v.x, v.y, v.z));
                         (flipdir[3] == 0) ? (v.x = -v.x) : ((flipdir[3] == 1) ? (v.y = -v.y) : (v.z = -v.z)) ;
@@ -2592,7 +2667,7 @@ __global__ void mcx_main_loop(uint media[], OutputType field[], OutputType camsi
                         updateproperty<islabel, issvmc>(&prop, mediaid, t, idx1d, media, (float3*)&p, &nuvox, flipdir); //< optical property across the interface
 
                         if (issvmc && (nuvox.sv.isupper ? nuvox.sv.upper : nuvox.sv.lower) == 0) { // terminate photon if photon is reflected to background medium
-                            if (launchnewphoton<ispencil, isreflect, islabel, issvmc, ispolarized>(&p, &v, &true_p, &s, &f, &rv, flipdir, &prop, &idx1d, field, &mediaid, &w0, (mediaidold & DET_MASK),
+                            if (launchnewphoton<ispencil, isreflect, islabel, issvmc, ispolarized>(&p, &v, &true_p, &reflection_data, &s, &f, &rv, flipdir, &prop, &idx1d, field, &mediaid, &w0, (mediaidold & DET_MASK),
                                     ppath, n_det, camsignals, detectedphoton, t, (RandType*)(sharedmem + sizeof(float) * (gcfg->nphaselen + gcfg->nanglelen) + threadIdx.x * gcfg->issaveseed * RAND_BUF_LEN * sizeof(RandType)),
                                     media, srcpattern, idx, (RandType*)n_seed, seeddata, gdebugdata, gprogress, photontof, &nuvox)) {
                                 break;
