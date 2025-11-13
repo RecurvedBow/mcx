@@ -2591,9 +2591,6 @@ __global__ void mcx_main_loop(uint media[], OutputType field[], OutputType camsi
                             true_v = {v.x, v.y, v.z};
                         }
                     } else { //< do reflection
-
-                        bool update_true_values = p.z > 1e-4 && !(mediaid == 0 && ((isdet & 0xF) == bcMirror));  // Only update if reflection cause is not mirror reflection at sides
-
                         GPUDEBUG(("ref faceid=%d p=[%f %f %f] v_old=[%f %f %f]\n", flipdir[3], p.x, p.y, p.z, v.x, v.y, v.z));
                         (flipdir[3] == 0) ? (v.x = -v.x) : ((flipdir[3] == 1) ? (v.y = -v.y) : (v.z = -v.z)) ;
                         rv = float3(__fdividef(1.f, v.x), __fdividef(1.f, v.y), __fdividef(1.f, v.z));
@@ -2608,12 +2605,6 @@ __global__ void mcx_main_loop(uint media[], OutputType field[], OutputType camsi
                         mediaid = (media[idx1d] & MED_MASK);
                         updateproperty<islabel, issvmc>(&prop, mediaid, t, idx1d, media, (float3*)&p, &nuvox, flipdir); //< optical property across the interface
                         
-                        if (update_true_values)
-                        {
-                            // Only update if reflection cause is not mirror reflection at sides
-                            true_p = {p.x, p.y, p.z};
-                            true_v = {v.x, v.y, v.z};
-                        }
                         if (issvmc && (nuvox.sv.isupper ? nuvox.sv.upper : nuvox.sv.lower) == 0) { // terminate photon if photon is reflected to background medium
                             if (launchnewphoton<ispencil, isreflect, islabel, issvmc, ispolarized>(&p, &v, &true_p, &true_v, &s, &f, &rv, flipdir, &prop, &idx1d, field, &mediaid, &w0, (mediaidold & DET_MASK),
                                     ppath, n_det, camsignals, detectedphoton, t, (RandType*)(sharedmem + sizeof(float) * (gcfg->nphaselen + gcfg->nanglelen) + threadIdx.x * gcfg->issaveseed * RAND_BUF_LEN * sizeof(RandType)),
