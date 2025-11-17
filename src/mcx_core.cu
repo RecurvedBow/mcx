@@ -351,7 +351,7 @@ __device__ inline void updatestokes(Stokes* s, float theta, float phi, float3* u
     s->i = 1.f;
 }
 
-__device__ inline void map_photon_to_camera_sensor(float camsignals[], float3 true_p0, float3 true_v, float photon_weight, RandType t[RAND_BUF_LEN])
+__device__ inline void map_photon_to_camera_sensor(float camsignals[], float3 true_p0, float4 true_v, float photon_weight, RandType t[RAND_BUF_LEN])
 {
     if (gcfg->cam_obj_dist < 0 || gcfg->cam_aperture_radius < 0)
     {
@@ -402,8 +402,7 @@ __device__ inline void map_photon_to_camera_sensor(float camsignals[], float3 tr
     if (is_backtrack)
     {
         // Backtrack
-        float true_dist = gcfg->cam_ideal_dist + true_p0.z;
-
+        float true_dist = gcfg->cam_obj_dist + true_p0.z;
         float2 p_on_plane_shifted = {
             true_p0.x - 0.5f * dim_x,
             true_p0.y - 0.5f * dim_y
@@ -1201,7 +1200,7 @@ __device__ inline void rotatevector(MCXdir* v, float stheta, float ctheta, float
  */
 
 template <const int ispencil, const int isreflect, const int islabel, const int issvmc, const int ispolarized>
-__device__ inline int launchnewphoton(MCXpos* p, MCXdir* v, float3* true_p, float3* true_v, Stokes* s, MCXtime* f, float3* rv, short flipdir[4], Medium* prop, uint* idx1d, OutputType* field,
+__device__ inline int launchnewphoton(MCXpos* p, MCXdir* v, float3* true_p, float4* true_v, Stokes* s, MCXtime* f, float3* rv, short flipdir[4], Medium* prop, uint* idx1d, OutputType* field,
                                       uint* mediaid, OutputType* w0, uint isdet, float ppath[], float n_det[], float camsignals[], uint* dpnum,
                                       RandType t[RAND_BUF_LEN], RandType photonseed[RAND_BUF_LEN],
                                       uint media[], float srcpattern[], int threadid, RandType rngseed[], RandType seeddata[], float gdebugdata[], volatile int gprogress[],
@@ -1284,7 +1283,7 @@ __device__ inline int launchnewphoton(MCXpos* p, MCXdir* v, float3* true_p, floa
                 saveexitppath(n_det, ppath, p, idx1d);
             }
         }
-
+        
         map_photon_to_camera_sensor(camsignals, *true_p, *true_v, p->w, t);
 
 #ifdef SAVE_DETECTORS
@@ -1817,6 +1816,7 @@ __device__ inline int launchnewphoton(MCXpos* p, MCXdir* v, float3* true_p, floa
     true_v->x = -1.f;
     true_v->y = -1.f;
     true_v->z = -1.f;
+    true_v->w = -1.f;
     return 0;
 }
 
@@ -1881,7 +1881,7 @@ __global__ void mcx_main_loop(uint media[], OutputType field[], OutputType camsi
     MCXdir  v = {0.f, 0.f, 0.f, 0.f}; //< Photon direction state: {x,y,z}: unitary direction vector in grid unit, nscat:total scat event
     MCXtime f = {0.f, 0.f, 0.f, -1.f}; //< Photon parameter state: pscat: remaining scattering probability,t: photon elapse time, pathlen: total pathlen in one voxel, ndone: completed photons
     float3 true_p = {-1.f, -1.f, -1.f}; //< The last photon position within or on the tissue. Used to track where the photon last left the tissue for image reconstruction (= Backtracking)
-    float3 true_v = {-1.f, -1.f, -1.f}; //< The last photon direction within or on the tissue. Used to account for reflection effects
+    float4 true_v = {-1.f, -1.f, -1.f, -1.f}; //< The last photon direction within or on the tissue. Used to account for reflection effects
 
     uint dim_x = gcfg->dimlen.x;
     uint dim_y = roundf(gcfg->dimlen.y / gcfg->dimlen.x);
@@ -2254,7 +2254,7 @@ __global__ void mcx_main_loop(uint media[], OutputType field[], OutputType camsi
         if (!is_air_voxel(prop.mua, prop.mus, prop.g, prop.n))
         {
             true_p = {p.x, p.y, p.z};
-            true_v = {v.x, v.y, v.z};
+            true_v = {v.x, v.y, v.z, -1.f};
         }
 
         /** remaining unitless scattering length: sum(s_i*mus_i), unit-less */
@@ -2583,14 +2583,19 @@ __global__ void mcx_main_loop(uint media[], OutputType field[], OutputType camsi
 
                         GPUDEBUG(("do transmission\n"));
                         rv = float3(__fdividef(1.f, v.x), __fdividef(1.f, v.y), __fdividef(1.f, v.z));
-
+                        
                         // Always update within internal refractions
                         if (mediaid != 0)
                         {
                             true_p = {p.x, p.y, p.z};
-                            true_v = {v.x, v.y, v.z};
+                            true_v = {v.x, v.y, v.z, -1.f};
                         }
                     } else { //< do reflection
+                        if (true_v.w <= 0.0f && p.z > 1e-4 && (mediaid == 0 && ((isdet & 0xF) == bcMirror)))  // Only update if reflection cause is not mirror reflection at sides
+                        {
+                            true_v = {v.x, v.y, v.z, 1.f};
+                        }
+
                         GPUDEBUG(("ref faceid=%d p=[%f %f %f] v_old=[%f %f %f]\n", flipdir[3], p.x, p.y, p.z, v.x, v.y, v.z));
                         (flipdir[3] == 0) ? (v.x = -v.x) : ((flipdir[3] == 1) ? (v.y = -v.y) : (v.z = -v.z)) ;
                         rv = float3(__fdividef(1.f, v.x), __fdividef(1.f, v.y), __fdividef(1.f, v.z));
