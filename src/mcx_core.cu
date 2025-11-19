@@ -2269,7 +2269,7 @@ __global__ void mcx_main_loop(uint media[], OutputType field[], OutputType camsi
 #endif
 
         /** Do not update true_p if this is an air voxel (mua < 1e-4) */
-        if (!is_air_voxel(prop.mua, prop.mus, prop.g, prop.n))
+        if (mediaid != 0 && !is_air_voxel(prop.mua, prop.mus, prop.g, prop.n))
         {
             true_p = {p.x, p.y, p.z};
             true_v = {v.x, v.y, v.z};
@@ -2581,11 +2581,6 @@ __global__ void mcx_main_loop(uint media[], OutputType field[], OutputType camsi
 
                         if (mediaid == 0 || (issvmc && (nuvox.sv.isupper ? nuvox.sv.upper : nuvox.sv.lower) == 0)) { // transmission to external boundary
                             GPUDEBUG(("transmit to air, relaunch\n"));
-                                if (fabsf(true_p.z - 1) > 0.01)
-                                {
-                                    printf("A%.1f %.1f %.1f\n", true_p.x, true_p.y, true_p.z);
-                                }
-
                             if (launchnewphoton<ispencil, isreflect, islabel, issvmc, ispolarized>(&p, &v, &true_p, &true_v, &s, &f, &rv, flipdir, &prop, &idx1d, field, &mediaid, &w0,
                                     (((idx1d == OUTSIDE_VOLUME_MAX && gcfg->bc[9 + flipdir[3]]) || (idx1d == OUTSIDE_VOLUME_MIN && gcfg->bc[6 + flipdir[3]])) ? OUTSIDE_VOLUME_MIN : (mediaidold & DET_MASK)),
                                     ppath, n_det, camsignals, detectedphoton, t, (RandType*)(sharedmem + sizeof(float) * (gcfg->nphaselen + gcfg->nanglelen) + threadIdx.x * gcfg->issaveseed * RAND_BUF_LEN * sizeof(RandType)),
@@ -2613,6 +2608,8 @@ __global__ void mcx_main_loop(uint media[], OutputType field[], OutputType camsi
                             true_v = {v.x, v.y, v.z};
                         }
                     } else { //< do reflection
+                        bool update_values = p.z > 1e-4 && (!is_air_voxel(prop.mua, prop.mus, prop.g, prop.n) || !(mediaid == 0 && ((isdet & 0xF) == bcMirror)));
+
                         GPUDEBUG(("ref faceid=%d p=[%f %f %f] v_old=[%f %f %f]\n", flipdir[3], p.x, p.y, p.z, v.x, v.y, v.z));
                         (flipdir[3] == 0) ? (v.x = -v.x) : ((flipdir[3] == 1) ? (v.y = -v.y) : (v.z = -v.z)) ;
                         rv = float3(__fdividef(1.f, v.x), __fdividef(1.f, v.y), __fdividef(1.f, v.z));
@@ -2626,6 +2623,12 @@ __global__ void mcx_main_loop(uint media[], OutputType field[], OutputType camsi
                         idx1d = idx1dold;
                         mediaid = (media[idx1d] & MED_MASK);
                         updateproperty<islabel, issvmc>(&prop, mediaid, t, idx1d, media, (float3*)&p, &nuvox, flipdir); //< optical property across the interface
+                        
+                        if (update_values)
+                        {
+                            true_p = {p.x, p.y, p.z};
+                            true_v = {v.x, v.y, v.z};
+                        }
 
                         if (issvmc && (nuvox.sv.isupper ? nuvox.sv.upper : nuvox.sv.lower) == 0) { // terminate photon if photon is reflected to background medium
                             if (launchnewphoton<ispencil, isreflect, islabel, issvmc, ispolarized>(&p, &v, &true_p, &true_v, &s, &f, &rv, flipdir, &prop, &idx1d, field, &mediaid, &w0, (mediaidold & DET_MASK),
