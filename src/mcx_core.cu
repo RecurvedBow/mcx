@@ -351,13 +351,14 @@ __device__ inline void updatestokes(Stokes* s, float theta, float phi, float3* u
     s->i = 1.f;
 }
 
-__device__ inline void map_photon_to_camera_sensor(float camsignals[], float3 true_p0, float3 true_v, float photon_weight, RandType t[RAND_BUF_LEN])
+__device__ inline void map_photon_to_camera_sensor(float camsignals[], MCXpos p0, float3 true_p0, float3 true_v, RandType t[RAND_BUF_LEN])
 {
     if (gcfg->cam_obj_dist < 0 || gcfg->cam_aperture_radius < 0)
     {
         return;
     }
-
+    
+    float photon_weight = p0.w;
     if (fabsf(photon_weight) < gcfg->minenergy)
     {
         // Was terminated by russian roulette
@@ -380,6 +381,12 @@ __device__ inline void map_photon_to_camera_sensor(float camsignals[], float3 tr
     uint dim_x = gcfg->dimlen.x;
     uint dim_y = roundf(gcfg->dimlen.y / gcfg->dimlen.x);
 
+    bool cause_was_borders = p0.x < 1e-3 || p0.y < 1e-3 || p0.z < 1e-3 || p0.x >= dim_x - 1e-3 || p0.y >= dim_y - 1e-3; // Todo: Include check for z
+    if (!cause_was_borders)
+    {
+        // For some reason, photons rarely get destroyed white within the tissue...? Cause is mediaid==0
+        return;
+    }
     atomicAdd(&camsignals[gcfg->dimlen.y], 1);
 
     // Normalize direction vector.
@@ -427,7 +434,6 @@ __device__ inline void map_photon_to_camera_sensor(float camsignals[], float3 tr
             p_on_ideal_plane_shifted.x + 0.5f * dim_x,
             p_on_ideal_plane_shifted.y + 0.5f * dim_y
         };
-        position_on_image = {true_p0.x, true_p0.y};
 
         // Adds the effect of Circle of Confusion (CoC)
         float coc_radius = gcfg->cam_true_aperture_radius * fabsf(true_dist - gcfg->cam_ideal_dist) / true_dist; 
@@ -1297,7 +1303,7 @@ __device__ inline int launchnewphoton(MCXpos* p, MCXdir* v, float3* true_p, floa
             }
         }
         
-        map_photon_to_camera_sensor(camsignals, *true_p, *true_v, p->w, t);
+        map_photon_to_camera_sensor(camsignals, *p, *true_p, *true_v, t);
 
 #ifdef SAVE_DETECTORS
 
@@ -2575,6 +2581,10 @@ __global__ void mcx_main_loop(uint media[], OutputType field[], OutputType camsi
 
                         if (mediaid == 0 || (issvmc && (nuvox.sv.isupper ? nuvox.sv.upper : nuvox.sv.lower) == 0)) { // transmission to external boundary
                             GPUDEBUG(("transmit to air, relaunch\n"));
+                                if (fabsf(true_p.z - 1) > 0.01)
+                                {
+                                    printf("A%.1f %.1f %.1f\n", true_p.x, true_p.y, true_p.z);
+                                }
 
                             if (launchnewphoton<ispencil, isreflect, islabel, issvmc, ispolarized>(&p, &v, &true_p, &true_v, &s, &f, &rv, flipdir, &prop, &idx1d, field, &mediaid, &w0,
                                     (((idx1d == OUTSIDE_VOLUME_MAX && gcfg->bc[9 + flipdir[3]]) || (idx1d == OUTSIDE_VOLUME_MIN && gcfg->bc[6 + flipdir[3]])) ? OUTSIDE_VOLUME_MIN : (mediaidold & DET_MASK)),
@@ -2597,11 +2607,12 @@ __global__ void mcx_main_loop(uint media[], OutputType field[], OutputType camsi
                         rv = float3(__fdividef(1.f, v.x), __fdividef(1.f, v.y), __fdividef(1.f, v.z));
                         
                         // Always update within internal refractions
-                        true_p = {p.x, p.y, p.z};
-                        true_v = {v.x, v.y, v.z};
+                        if (mediaid != 0)
+                        {
+                            true_p = {p.x, p.y, p.z};
+                            true_v = {v.x, v.y, v.z};
+                        }
                     } else { //< do reflection
-                        bool update_values = p.z > 1e-4 && (!is_air_voxel(prop.mua, prop.mus, prop.g, prop.n) || !(mediaid == 0 && ((isdet & 0xF) == bcMirror)));
-
                         GPUDEBUG(("ref faceid=%d p=[%f %f %f] v_old=[%f %f %f]\n", flipdir[3], p.x, p.y, p.z, v.x, v.y, v.z));
                         (flipdir[3] == 0) ? (v.x = -v.x) : ((flipdir[3] == 1) ? (v.y = -v.y) : (v.z = -v.z)) ;
                         rv = float3(__fdividef(1.f, v.x), __fdividef(1.f, v.y), __fdividef(1.f, v.z));
@@ -2615,12 +2626,6 @@ __global__ void mcx_main_loop(uint media[], OutputType field[], OutputType camsi
                         idx1d = idx1dold;
                         mediaid = (media[idx1d] & MED_MASK);
                         updateproperty<islabel, issvmc>(&prop, mediaid, t, idx1d, media, (float3*)&p, &nuvox, flipdir); //< optical property across the interface
-                        
-                        if (update_values)
-                        {
-                            true_p = {p.x, p.y, p.z};
-                            true_v = {v.x, v.y, v.z};
-                        }
 
                         if (issvmc && (nuvox.sv.isupper ? nuvox.sv.upper : nuvox.sv.lower) == 0) { // terminate photon if photon is reflected to background medium
                             if (launchnewphoton<ispencil, isreflect, islabel, issvmc, ispolarized>(&p, &v, &true_p, &true_v, &s, &f, &rv, flipdir, &prop, &idx1d, field, &mediaid, &w0, (mediaidold & DET_MASK),
